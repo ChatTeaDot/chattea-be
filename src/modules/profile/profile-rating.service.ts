@@ -1,4 +1,4 @@
-import type { Pool } from "pg";
+import { dbQuery, sql, type Database } from "../../db/client.js";
 
 export type ProfileRatingSummary = {
   userId: string;
@@ -7,42 +7,20 @@ export type ProfileRatingSummary = {
 };
 
 export class ProfileRatingService {
-  private readonly ratings = new Map<string, { ratedUserId: string; score: number }>();
-
-  rateProfile(raterUserId: string, ratedUserId: string, score: number): ProfileRatingSummary {
-    validateRating(raterUserId, ratedUserId, score);
-    this.ratings.set(`${raterUserId}:${ratedUserId}`, { ratedUserId, score });
-    return this.getSummary(ratedUserId);
-  }
-
-  getSummary(userId: string): ProfileRatingSummary {
-    const scores = [...this.ratings.values()]
-      .filter((rating) => rating.ratedUserId === userId)
-      .map((rating) => rating.score);
-
-    return {
-      userId,
-      averageScore: scores.length ? scores.reduce((sum, score) => sum + score, 0) / scores.length : 0,
-      ratingCount: scores.length,
-    };
-  }
-}
-
-export class PostgresProfileRatingService {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly db: Database) {}
 
   async rateProfile(raterUserId: string, ratedUserId: string, score: number): Promise<ProfileRatingSummary> {
     validateUuid(raterUserId);
     validateUuid(ratedUserId);
     validateRating(raterUserId, ratedUserId, score);
-    await this.pool.query(
-      `
+    await dbQuery(
+      this.db,
+      sql`
         INSERT INTO profile_ratings (rater_user_id, rated_user_id, score)
-        VALUES ($1, $2, $3)
+        VALUES (${raterUserId}, ${ratedUserId}, ${score})
         ON CONFLICT (rater_user_id, rated_user_id)
         DO UPDATE SET score = EXCLUDED.score, updated_at = now()
       `,
-      [raterUserId, ratedUserId, score],
     );
 
     return this.getSummary(ratedUserId);
@@ -50,14 +28,14 @@ export class PostgresProfileRatingService {
 
   async getSummary(userId: string): Promise<ProfileRatingSummary> {
     validateUuid(userId);
-    const result = await this.pool.query<{ average_score: string | null; rating_count: string }>(
-      `
+    const result = await dbQuery<{ average_score: string | null; rating_count: string }>(
+      this.db,
+      sql`
         SELECT AVG(score)::text AS average_score,
                COUNT(*)::text AS rating_count
         FROM profile_ratings
-        WHERE rated_user_id = $1
+        WHERE rated_user_id = ${userId}
       `,
-      [userId],
     );
 
     return {

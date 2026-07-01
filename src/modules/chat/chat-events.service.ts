@@ -1,4 +1,4 @@
-import type { Message } from "./chat-service.js";
+import type { Message } from "./chat.service.js";
 
 export type ChatEventMap = {
   messageCreated: Message;

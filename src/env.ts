@@ -6,7 +6,7 @@ export type Env = {
   serviceEnv: string;
   serviceVersion: string;
   phoneCodePepper: string;
-  smsProvider: "memory" | "munjanara";
+  smsProvider: "munjanara";
   smsSenderId: string;
   munjanaraEndpoint: string | null;
   munjanaraUserId: string | null;
@@ -31,7 +31,7 @@ export function readEnv(source: NodeJS.ProcessEnv = process.env): Env {
     serviceEnv: source.SERVICE_ENV ?? source.NODE_ENV ?? "development",
     serviceVersion: source.SERVICE_VERSION ?? "dev",
     phoneCodePepper: source.PHONE_CODE_PEPPER ?? "dev-only-pepper",
-    smsProvider: source.SMS_PROVIDER === "munjanara" ? "munjanara" : "memory",
+    smsProvider: "munjanara",
     smsSenderId: source.SMS_SENDER_ID ?? "dev-sender",
     munjanaraEndpoint: source.MUNJANARA_ENDPOINT ?? null,
     munjanaraUserId: source.MUNJANARA_USER_ID ?? null,
@@ -64,7 +64,7 @@ function assertProductionEnv(env: Env): void {
     throw new Error("PHONE_CODE_PEPPER_REQUIRED");
   }
 
-  if (env.smsProvider !== "munjanara" || !env.munjanaraEndpoint || !env.munjanaraUserId || !env.munjanaraApiKey) {
+  if (!env.munjanaraEndpoint || !env.munjanaraUserId || !env.munjanaraApiKey) {
     throw new Error("MUNJANARA_CONFIG_REQUIRED");
   }
 

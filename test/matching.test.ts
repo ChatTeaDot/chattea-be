@@ -1,109 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { MatchingService, PostgresMatchingService } from "../src/matching/matching-service.js";
+import { MatchingService } from "../src/modules/matching/matching.service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeIfDb = databaseUrl ? describe : describe.skip;
 
-describe("MatchingService", () => {
-  function addSelfCandidate(service: MatchingService, userId: string) {
-    service["candidates"].set(userId, {
-      id: userId,
-      nickname: "내 이름",
-      intro: "내 소개",
-      planId: "black",
-      blackRecommended: false,
-    });
-  }
-
-  it("lists candidates and marks liked users", () => {
-    const service = new MatchingService();
-
-    expect(service.listCandidates("me")[0]).toMatchObject({
-      id: "demo-match-user",
-      likedByMe: false,
-      planId: "black",
-      blackRecommended: true,
-    });
-    expect(service.likeUser("me", "demo-match-user")).toEqual({ matched: false, roomId: null });
-    expect(service.listCandidates("me")[0]).toMatchObject({ id: "demo-match-user", likedByMe: true });
-    expect(service.listBlackCandidates("me", "free")).toEqual([]);
-    expect(service.listBlackCandidates("me", "black")[0]).toMatchObject({ id: "demo-match-user" });
-  });
-
-  it("counts likes once per target and rejects after daily free limit", () => {
-    const service = new MatchingService();
-    const now = new Date("2026-06-25T00:00:00.000Z");
-    for (let i = 2; i <= 11; i++) {
-      service["candidates"].set(`demo-match-user${i}`, {
-        id: `demo-match-user${i}`,
-        nickname: `차한잔${i}`,
-        intro: `${i}번째`,
-        planId: "free",
-        blackRecommended: false,
-      });
-    }
-
-    for (let i = 0; i < 10; i++) {
-      service.likeUser(
-        "me",
-        i === 0 ? "demo-match-user" : `demo-match-user${i + 1}`,
-        "free",
-        now,
-      );
-    }
-
-    expect(() => service.likeUser("me", "demo-match-user11", "free", now)).toThrow("LIKE_LIMIT_REACHED");
-  });
-
-  it("shows who liked me and enforces paid plan window limits", () => {
-    const service = new MatchingService();
-    addSelfCandidate(service, "me");
-    service["candidates"].set("someone", {
-      id: "someone",
-      nickname: "누구",
-      intro: "안녕하세요",
-      planId: "free",
-      blackRecommended: false,
-    });
-
-    service.likeUser("someone", "me", "free", new Date("2026-06-25T00:00:00.000Z"));
-    expect(service.listLikedMeCandidates("me", "basic")).toMatchObject([
-      {
-        id: "someone",
-        nickname: "누구",
-        likedByMe: false,
-        blackRecommended: false,
-        planId: "free",
-      },
-    ]);
-
-    service["likes"].add("me:someone");
-    expect(() => service.listLikedMeCandidates("me", "basic")).not.toThrow();
-    expect(() => service.listLikedMeCandidates("me", "basic")).not.toThrow();
-    expect(() => service.listLikedMeCandidates("me", "basic")).toThrow("LIKED_ME_LIMIT_REACHED");
-  });
-
-  it("blocks liked-me visibility for free users", () => {
-    const service = new MatchingService();
-    addSelfCandidate(service, "me");
-    service["candidates"].set("someone", {
-      id: "someone",
-      nickname: "누구",
-      intro: "안녕하세요",
-      planId: "free",
-      blackRecommended: false,
-    });
-
-    service.likeUser("someone", "me", "free", new Date("2026-06-25T00:00:00.000Z"));
-
-    expect(() => service.listLikedMeCandidates("me", "free")).toThrow("LIKED_ME_NOT_AVAILABLE");
-  });
-});
-
-describeIfDb("PostgresMatchingService", () => {
+describeIfDb("MatchingService", () => {
   const schema = `test_${randomUUID().replaceAll("-", "_")}`;
   const url = new URL(databaseUrl ?? "postgres://localhost/unused");
   url.searchParams.set("options", `-csearch_path=${schema}`);
@@ -111,7 +16,7 @@ describeIfDb("PostgresMatchingService", () => {
   const userA = "00000000-0000-4000-8000-000000000201";
   const userB = "00000000-0000-4000-8000-000000000202";
   const userC = "00000000-0000-4000-8000-000000000203";
-  let service: PostgresMatchingService;
+  let service: MatchingService;
 
   beforeAll(async () => {
     const setupPool = new Pool({ connectionString: databaseUrl });
@@ -145,7 +50,7 @@ describeIfDb("PostgresMatchingService", () => {
       "INSERT INTO user_subscriptions (user_id, plan_id, status) VALUES ($1, 'black', 'active')",
       [userB],
     );
-    service = new PostgresMatchingService(pool);
+    service = new MatchingService(drizzle(pool));
   });
 
   beforeEach(async () => {

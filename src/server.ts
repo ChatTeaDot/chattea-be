@@ -1,37 +1,38 @@
 import { createServer } from "node:http";
 import { createYoga, maskError as yogaMaskError } from "graphql-yoga";
 import { useServer } from "graphql-ws/use/ws";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { WebSocketServer } from "ws";
-import { AuthService, PostgresAuthService } from "./auth/auth-service.js";
-import { PostgresSessionStore, SessionStore, type SessionStoreLike } from "./auth/session-store.js";
-import { ChatService, PostgresChatService } from "./chat/chat-service.js";
-import { CommunityService, PostgresCommunityService } from "./community/community-service.js";
+import { AuthService } from "./modules/auth/auth.service.js";
+import { SessionStore, type SessionStoreLike } from "./modules/auth/session.repository.js";
+import { ChatService } from "./modules/chat/chat.service.js";
+import { CommunityService } from "./modules/community/community.service.js";
 import { readEnv } from "./env.js";
-import { makeSchema, type GraphQLContext } from "./graphql/schema.js";
-import { KakaoRestClient } from "./kakao/kakao-client.js";
-import { MatchingService, PostgresMatchingService } from "./matching/matching-service.js";
+import { makeSchema, type GraphQLContext } from "./modules/graphql/graphql.module.js";
+import { KakaoRestClient } from "./modules/auth/kakao.strategy.js";
+import { MatchingService } from "./modules/matching/matching.service.js";
 import { createRedactingLogger } from "./observability/logger.js";
 import { initializeObservability } from "./observability/instrument.js";
 import { HttpReporter, MultiReporter, NoopReporter, type ObservabilityReporter } from "./observability/reporter.js";
-import type { PhoneRequestMetadata } from "./phone/phone-service.js";
-import { PhoneService, PostgresPhoneService } from "./phone/phone-service.js";
-import { PostgresProfileRatingService, ProfileRatingService } from "./profile/profile-rating-service.js";
-import { InMemorySmsSender, MunjanaraSmsSender, type SmsSender } from "./sms/sms-sender.js";
-import { PostgresSubscriptionService, SubscriptionService } from "./subscription/subscription-service.js";
-import { DevUploadSigner, R2UploadSigner, UploadService, type UploadSigner } from "./upload/upload-service.js";
+import type { PhoneRequestMetadata } from "./modules/auth/phone.service.js";
+import { PhoneService } from "./modules/auth/phone.service.js";
+import { ProfileRatingService } from "./modules/profile/profile-rating.service.js";
+import { MunjanaraSmsSender, type SmsSender } from "./modules/auth/sms-sender.service.js";
+import { SubscriptionService } from "./modules/subscription/subscription.service.js";
+import { DevUploadSigner, R2UploadSigner, UploadService, type UploadSigner } from "./modules/upload/upload.service.js";
 
 type CreateAppOptions = {
   authService?: AuthService;
-  chatService?: ChatService | PostgresChatService;
-  communityService?: CommunityService | PostgresCommunityService;
-  matchingService?: MatchingService | PostgresMatchingService;
-  phoneService?: PhoneService | PostgresPhoneService;
+  chatService?: ChatService;
+  communityService?: CommunityService;
+  matchingService?: MatchingService;
+  phoneService?: PhoneService;
   phoneCodePepper?: string;
-  profileRatingService?: ProfileRatingService | PostgresProfileRatingService;
+  profileRatingService?: ProfileRatingService;
   smsSender?: SmsSender;
   sessionStore?: SessionStoreLike;
-  subscriptionService?: SubscriptionService | PostgresSubscriptionService;
+  subscriptionService?: SubscriptionService;
   uploadService?: UploadService;
   now?: () => Date;
 };
@@ -39,30 +40,29 @@ type CreateAppOptions = {
 export function createApp(options: CreateAppOptions = {}) {
   const env = readEnv();
   initializeObservability(env);
-  const pool = env.databaseUrl ? new Pool({ connectionString: env.databaseUrl }) : null;
-  const sessionStore = options.sessionStore ?? (pool ? new PostgresSessionStore(pool) : new SessionStore());
+  if (!env.databaseUrl) {
+    throw new Error("DATABASE_URL_REQUIRED");
+  }
+
+  const pool = new Pool({ connectionString: env.databaseUrl });
+  const db = drizzle(pool);
+  const sessionStore = options.sessionStore ?? new SessionStore(db);
   const phoneService =
     options.phoneService ??
-    (pool
-      ? new PostgresPhoneService(
-          pool,
-          options.smsSender ?? createSmsSender(env),
-          options.phoneCodePepper ?? env.phoneCodePepper,
-          sessionStore,
-        )
-      : new PhoneService(
-          options.smsSender ?? createSmsSender(env),
-          options.phoneCodePepper ?? env.phoneCodePepper,
-          sessionStore,
-        ));
+    new PhoneService(
+      db,
+      options.smsSender ?? createSmsSender(env),
+      options.phoneCodePepper ?? env.phoneCodePepper,
+      sessionStore,
+    );
   const authService =
     options.authService ??
-    (pool ? new PostgresAuthService(new KakaoRestClient(), pool, sessionStore) : new AuthService(new KakaoRestClient(), sessionStore));
-  const chatService = options.chatService ?? createChatService(env, pool);
-  const communityService = options.communityService ?? createCommunityService(env, pool);
-  const matchingService = options.matchingService ?? createMatchingService(env, pool);
-  const profileRatingService = options.profileRatingService ?? createProfileRatingService(env, pool);
-  const subscriptionService = options.subscriptionService ?? createSubscriptionService(env, pool);
+    new AuthService(new KakaoRestClient(), db, sessionStore);
+  const chatService = options.chatService ?? new ChatService(db);
+  const communityService = options.communityService ?? new CommunityService(db);
+  const matchingService = options.matchingService ?? new MatchingService(db);
+  const profileRatingService = options.profileRatingService ?? new ProfileRatingService(db);
+  const subscriptionService = options.subscriptionService ?? new SubscriptionService(db);
   const uploadService = options.uploadService ?? new UploadService(createUploadSigner(env));
   const baseContext = options.now
     ? { authService, chatService, communityService, matchingService, phoneService, profileRatingService, subscriptionService, uploadService, now: options.now }
@@ -175,10 +175,6 @@ function readBearerTokenFromValue(value: unknown): string | null {
 }
 
 function createSmsSender(env: ReturnType<typeof readEnv>): SmsSender {
-  if (env.smsProvider !== "munjanara") {
-    return new InMemorySmsSender();
-  }
-
   if (!env.munjanaraEndpoint || !env.munjanaraUserId || !env.munjanaraApiKey) {
     throw new Error("MUNJANARA_CONFIG_REQUIRED");
   }
@@ -189,46 +185,6 @@ function createSmsSender(env: ReturnType<typeof readEnv>): SmsSender {
     apiKey: env.munjanaraApiKey,
     senderId: env.smsSenderId,
   });
-}
-
-function createChatService(env: ReturnType<typeof readEnv>, pool: Pool | null) {
-  if (!env.databaseUrl || !pool) {
-    return new ChatService();
-  }
-
-  return new PostgresChatService(pool);
-}
-
-function createMatchingService(env: ReturnType<typeof readEnv>, pool: Pool | null) {
-  if (!env.databaseUrl || !pool) {
-    return new MatchingService();
-  }
-
-  return new PostgresMatchingService(pool);
-}
-
-function createCommunityService(env: ReturnType<typeof readEnv>, pool: Pool | null) {
-  if (!env.databaseUrl || !pool) {
-    return new CommunityService();
-  }
-
-  return new PostgresCommunityService(pool);
-}
-
-function createProfileRatingService(env: ReturnType<typeof readEnv>, pool: Pool | null) {
-  if (!env.databaseUrl || !pool) {
-    return new ProfileRatingService();
-  }
-
-  return new PostgresProfileRatingService(pool);
-}
-
-function createSubscriptionService(env: ReturnType<typeof readEnv>, pool: Pool | null) {
-  if (!env.databaseUrl || !pool) {
-    return new SubscriptionService();
-  }
-
-  return new PostgresSubscriptionService(pool);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

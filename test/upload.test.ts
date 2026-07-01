@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { R2UploadSigner, UploadService, type UploadSigner } from "../src/upload/upload-service.js";
+import { R2UploadSigner, UploadService, type UploadSigner } from "../src/modules/upload/upload.service.js";
 
 describe("UploadService", () => {
   it("creates presigned image uploads through signer", async () => {

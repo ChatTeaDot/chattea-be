@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { KakaoRestClient } from "../src/kakao/kakao-client.js";
+import { KakaoRestClient } from "../src/modules/auth/kakao.strategy.js";
 
 describe("KakaoRestClient", () => {
   it("loads profile from Kakao user info endpoint with bearer token", async () => {

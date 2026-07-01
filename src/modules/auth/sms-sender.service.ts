@@ -2,14 +2,6 @@ export type SmsSender = {
   sendPhoneCode(input: { phoneE164: string; code: string }): Promise<void>;
 };
 
-export class InMemorySmsSender implements SmsSender {
-  readonly messages: Array<{ phoneE164: string; code: string }> = [];
-
-  async sendPhoneCode(input: { phoneE164: string; code: string }): Promise<void> {
-    this.messages.push(input);
-  }
-}
-
 export type MunjanaraSmsSenderConfig = {
   endpoint: string;
   userId: string;

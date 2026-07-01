@@ -1,35 +1,40 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PostgresAuthService } from "../src/auth/auth-service.js";
-import { PostgresSessionStore } from "../src/auth/session-store.js";
-import { PostgresPhoneService } from "../src/phone/phone-service.js";
-import { InMemorySmsSender } from "../src/sms/sms-sender.js";
+import { AuthService } from "../src/modules/auth/auth.service.js";
+import { SessionStore } from "../src/modules/auth/session.repository.js";
+import { PhoneService } from "../src/modules/auth/phone.service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeIfDb = databaseUrl ? describe : describe.skip;
 
-describeIfDb("PostgreSQL auth and phone flow", () => {
+describeIfDb("auth and phone flow", () => {
   const schema = `test_${randomUUID().replaceAll("-", "_")}`;
   const url = new URL(databaseUrl ?? "postgres://localhost/unused");
   url.searchParams.set("options", `-csearch_path=${schema}`);
   const pool = new Pool({ connectionString: url.toString(), max: 1 });
-  const sms = new InMemorySmsSender();
-  let sessionStore: PostgresSessionStore;
-  let phone: PostgresPhoneService;
-  let auth: PostgresAuthService;
+  const sms = {
+    messages: [] as Array<{ phoneE164: string; code: string }>,
+    async sendPhoneCode(input: { phoneE164: string; code: string }) {
+      this.messages.push(input);
+    },
+  };
+  let sessionStore: SessionStore;
+  let phone: PhoneService;
+  let auth: AuthService;
 
   beforeAll(async () => {
     const setupPool = new Pool({ connectionString: databaseUrl });
     await setupPool.query(`CREATE SCHEMA ${schema}`);
     await setupPool.end();
     await pool.query(readFileSync("migrations/001_initial_schema.sql", "utf8"));
-    sessionStore = new PostgresSessionStore(pool);
-    phone = new PostgresPhoneService(pool, sms, "pepper", sessionStore);
-    auth = new PostgresAuthService(
+    sessionStore = new SessionStore(drizzle(pool));
+    phone = new PhoneService(drizzle(pool), sms, "pepper", sessionStore);
+    auth = new AuthService(
       { getProfile: async () => ({ id: "kakao-1", nickname: "tea" }) },
-      pool,
+      drizzle(pool),
       sessionStore,
     );
   });
