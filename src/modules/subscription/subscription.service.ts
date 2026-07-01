@@ -1,37 +1,25 @@
-import type { Pool } from "pg";
+import { dbQuery, sql, type Database } from "../../db/client.js";
 
 export type CurrentSubscription = {
   planId: string;
 };
 
 export class SubscriptionService {
-  private readonly plans = new Map<string, string>();
-
-  getCurrentSubscription(userId: string): CurrentSubscription {
-    return { planId: this.plans.get(userId) ?? "free" };
-  }
-
-  setCurrentPlanForTest(userId: string, planId: string): void {
-    this.plans.set(userId, planId);
-  }
-}
-
-export class PostgresSubscriptionService {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly db: Database) {}
 
   async getCurrentSubscription(userId: string): Promise<CurrentSubscription> {
     validateUuid(userId);
-    const result = await this.pool.query<{ plan_id: string }>(
-      `
+    const result = await dbQuery<{ plan_id: string }>(
+      this.db,
+      sql`
         SELECT plan_id
         FROM user_subscriptions
-        WHERE user_id = $1
+        WHERE user_id = ${userId}
           AND status = 'active'
           AND (current_period_ends_at IS NULL OR current_period_ends_at > now())
         ORDER BY created_at DESC
         LIMIT 1
       `,
-      [userId],
     );
 
     return { planId: result.rows[0]?.plan_id ?? "free" };

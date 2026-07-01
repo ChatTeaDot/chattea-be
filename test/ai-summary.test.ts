@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildUnreadMessageSummary } from "../src/subscription/ai-summary.js";
+import { buildUnreadMessageSummary } from "../src/modules/subscription/ai-summary.service.js";
 
 describe("AI summary rules", () => {
   it("gates unread summaries to enabled Gold or Black plans and 30+ chars", () => {

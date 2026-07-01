@@ -1,35 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { CommunityService, PostgresCommunityService } from "../src/community/community-service.js";
+import { CommunityService } from "../src/modules/community/community.service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeIfDb = databaseUrl ? describe : describe.skip;
 
-describe("CommunityService", () => {
-  it("creates anonymous posts, comments, and reports without exposing author ids", () => {
-    const service = new CommunityService();
-    const post = service.createPost("user-1", { title: "연애 상담", body: "첫 대화가 어려워요" });
-    const comment = service.createComment("user-2", post.id, "천천히 물어보세요");
-
-    expect(post).toMatchObject({ anonymousNickname: "익명1", title: "연애 상담", commentCount: 0 });
-    expect(comment).toMatchObject({ anonymousNickname: "익명1", body: "천천히 물어보세요" });
-    expect(service.listPosts()[0]).toMatchObject({ id: post.id, commentCount: 1 });
-    expect(service.listComments(post.id)[0]).toMatchObject({ id: comment.id });
-    expect(service.reportPost("user-2", post.id, "신고 사유")).toBe(true);
-    expect("authorUserId" in post).toBe(false);
-  });
-});
-
-describeIfDb("PostgresCommunityService", () => {
+describeIfDb("CommunityService", () => {
   const schema = `test_${randomUUID().replaceAll("-", "_")}`;
   const url = new URL(databaseUrl ?? "postgres://localhost/unused");
   url.searchParams.set("options", `-csearch_path=${schema}`);
   const pool = new Pool({ connectionString: url.toString(), max: 1 });
   const userA = "00000000-0000-4000-8000-000000000301";
   const userB = "00000000-0000-4000-8000-000000000302";
-  let service: PostgresCommunityService;
+  let service: CommunityService;
 
   beforeAll(async () => {
     const setupPool = new Pool({ connectionString: databaseUrl });
@@ -45,7 +31,7 @@ describeIfDb("PostgresCommunityService", () => {
       `,
       [userA, userB],
     );
-    service = new PostgresCommunityService(pool);
+    service = new CommunityService(drizzle(pool));
   });
 
   afterAll(async () => {

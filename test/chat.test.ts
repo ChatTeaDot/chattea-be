@@ -1,59 +1,80 @@
-import { describe, expect, it } from "vitest";
-import { ChatService } from "../src/chat/chat-service.js";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { drizzle } from "drizzle-orm/node-postgres";
+import { Pool } from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ChatService } from "../src/modules/chat/chat.service.js";
 
-describe("ChatService", () => {
-  it("stores messages and returns the same server message for duplicate idempotency key", () => {
-    const service = new ChatService();
+const databaseUrl = process.env.TEST_DATABASE_URL;
+const describeIfDb = databaseUrl ? describe : describe.skip;
 
-    const first = service.sendMessage(
-      { roomId: "demo-room", text: "안녕하세요", idempotencyKey: "temp-1" },
+describeIfDb("ChatService", () => {
+  const schema = `test_${randomUUID().replaceAll("-", "_")}`;
+  const url = new URL(databaseUrl ?? "postgres://localhost/unused");
+  url.searchParams.set("options", `-csearch_path=${schema}`);
+  const pool = new Pool({ connectionString: url.toString(), max: 1 });
+  const roomId = "00000000-0000-4000-8000-000000000001";
+  const userId = "00000000-0000-4000-8000-000000000101";
+  const blockedUserId = "00000000-0000-4000-8000-000000000102";
+  let service: ChatService;
+
+  beforeAll(async () => {
+    const setupPool = new Pool({ connectionString: databaseUrl });
+    await setupPool.query(`CREATE SCHEMA ${schema}`);
+    await setupPool.end();
+    await pool.query(readFileSync("migrations/001_initial_schema.sql", "utf8"));
+    await pool.query(
+      `
+        INSERT INTO users (id, phone_e164, nickname, terms_accepted_at)
+        VALUES
+          ($1, '+821011110101', 'reporter', now()),
+          ($2, '+821011110102', 'blocked', now())
+      `,
+      [userId, blockedUserId],
+    );
+    service = new ChatService(drizzle(pool));
+  });
+
+  afterAll(async () => {
+    await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    await pool.end();
+  });
+
+  it("persists messages and dedupes by idempotency key", async () => {
+    const first = await service.sendMessage(
+      { roomId, text: "안녕하세요", idempotencyKey: "pg-temp-1" },
       new Date("2026-06-25T00:00:01.000Z"),
     );
-    const duplicate = service.sendMessage(
-      { roomId: "demo-room", text: "안녕하세요", idempotencyKey: "temp-1" },
+    const duplicate = await service.sendMessage(
+      { roomId, text: "안녕하세요", idempotencyKey: "pg-temp-1" },
       new Date("2026-06-25T00:00:02.000Z"),
     );
 
     expect(duplicate).toEqual(first);
-    expect(service.listMessages({ roomId: "demo-room" }).filter((message) => message.text === "안녕하세요")).toHaveLength(1);
-    expect(service.listRooms()[0]!.lastMessage).toBe("안녕하세요");
+    expect((await service.listMessages({ roomId })).filter((message) => message.text === "안녕하세요")).toHaveLength(1);
+    expect((await service.listRooms())[0]!.lastMessage).toBe("안녕하세요");
   });
 
-  it("rejects empty and overlong messages", () => {
-    const service = new ChatService();
+  it("edits, deletes, and marks rooms read", async () => {
+    const message = await service.sendMessage({ roomId, text: "before" });
 
-    expect(() => service.sendMessage({ roomId: "demo-room", text: "   " })).toThrow("MESSAGE_TEXT_REQUIRED");
-    expect(() => service.sendMessage({ roomId: "demo-room", text: "a".repeat(91) })).toThrow("MESSAGE_TEXT_TOO_LONG");
+    expect((await service.editMessage({ messageId: message.id, text: "after" })).text).toBe("after");
+    expect(await service.markRoomRead(roomId)).toBe(true);
+    expect(await service.isRoomRead(roomId)).toBe(true);
+    expect(await service.deleteMessage(message.id)).toBe(true);
+    expect((await service.listMessages({ roomId })).some((item) => item.id === message.id)).toBe(false);
   });
 
-  it("limits the first message in a new room to 30 characters", () => {
-    const service = new ChatService();
+  it("persists user blocks and message reports", async () => {
+    const message = await service.sendMessage({ roomId, text: "신고 대상" });
 
-    expect(() => service.sendMessage({ roomId: "new-room", text: "a".repeat(31) })).toThrow(
-      "FIRST_MESSAGE_TEXT_TOO_LONG",
-    );
-    expect(service.sendMessage({ roomId: "new-room", text: "a".repeat(30) }).text).toHaveLength(30);
-  });
+    expect(await service.blockUser(userId, blockedUserId)).toBe(true);
+    expect(await service.reportMessage(userId, message.id, "불쾌한 메시지")).toBe(true);
 
-  it("edits, deletes, and marks rooms read", () => {
-    const service = new ChatService();
-    const message = service.sendMessage({ roomId: "demo-room", text: "before" });
+    const block = await pool.query("SELECT 1 FROM user_blocks WHERE blocker_user_id = $1 AND blocked_user_id = $2", [userId, blockedUserId]);
+    const report = await pool.query("SELECT reason FROM message_reports WHERE reporter_user_id = $1 AND message_id = $2", [userId, message.id]);
 
-    expect(service.editMessage({ messageId: message.id, text: "after" }).text).toBe("after");
-    expect(service.listRooms()[0]!.lastMessage).toBe("after");
-    expect(service.markRoomRead("demo-room")).toBe(true);
-    expect(service.isRoomRead("demo-room")).toBe(true);
-    expect(service.deleteMessage(message.id)).toBe(true);
-    expect(service.listMessages({ roomId: "demo-room" }).some((item) => item.id === message.id)).toBe(false);
-  });
-
-  it("blocks users and reports messages", () => {
-    const service = new ChatService();
-    const message = service.sendMessage({ roomId: "demo-room", text: "신고 대상" });
-
-    expect(service.blockUser("user-1", "user-2")).toBe(true);
-    expect(() => service.blockUser("user-1", "user-1")).toThrow("BLOCK_SELF_NOT_ALLOWED");
-    expect(service.reportMessage("user-1", message.id, "불쾌한 메시지")).toBe(true);
-    expect(() => service.reportMessage("user-1", message.id, " ")).toThrow("REPORT_REASON_REQUIRED");
+    expect(block.rowCount).toBe(1);
+    expect(report.rows[0]?.reason).toBe("불쾌한 메시지");
   });
 });

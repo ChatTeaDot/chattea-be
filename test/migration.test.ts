@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const migration = readFileSync(new URL("../migrations/001_initial_schema.sql", import.meta.url), "utf8");
 
-describe("initial PostgreSQL migration", () => {
+describe("initial migration", () => {
   it("creates every documented table", () => {
     for (const table of [
       "users",

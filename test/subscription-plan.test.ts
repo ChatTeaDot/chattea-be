@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { subscriptionPlans } from "../src/subscription/plan-catalog.js";
+import { subscriptionPlans } from "../src/modules/subscription/plan-catalog.service.js";
 
 describe("subscription plan catalog", () => {
   it("keeps documented plan names and monthly prices", () => {

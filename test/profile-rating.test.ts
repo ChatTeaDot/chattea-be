@@ -1,31 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PostgresProfileRatingService, ProfileRatingService } from "../src/profile/profile-rating-service.js";
+import { ProfileRatingService } from "../src/modules/profile/profile-rating.service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeIfDb = databaseUrl ? describe : describe.skip;
 
-describe("ProfileRatingService", () => {
-  it("upserts profile ratings without exposing them as public profile scores", () => {
-    const service = new ProfileRatingService();
-
-    expect(service.rateProfile("user-1", "user-2", 4)).toEqual({ userId: "user-2", averageScore: 4, ratingCount: 1 });
-    expect(service.rateProfile("user-1", "user-2", 5)).toEqual({ userId: "user-2", averageScore: 5, ratingCount: 1 });
-    expect(() => service.rateProfile("user-1", "user-1", 5)).toThrow("PROFILE_RATE_SELF_NOT_ALLOWED");
-    expect(() => service.rateProfile("user-1", "user-2", 6)).toThrow("PROFILE_RATING_SCORE_INVALID");
-  });
-});
-
-describeIfDb("PostgresProfileRatingService", () => {
+describeIfDb("ProfileRatingService", () => {
   const schema = `test_${randomUUID().replaceAll("-", "_")}`;
   const url = new URL(databaseUrl ?? "postgres://localhost/unused");
   url.searchParams.set("options", `-csearch_path=${schema}`);
   const pool = new Pool({ connectionString: url.toString(), max: 1 });
   const userA = "00000000-0000-4000-8000-000000000401";
   const userB = "00000000-0000-4000-8000-000000000402";
-  let service: PostgresProfileRatingService;
+  let service: ProfileRatingService;
 
   beforeAll(async () => {
     const setupPool = new Pool({ connectionString: databaseUrl });
@@ -41,7 +31,7 @@ describeIfDb("PostgresProfileRatingService", () => {
       `,
       [userA, userB],
     );
-    service = new PostgresProfileRatingService(pool);
+    service = new ProfileRatingService(drizzle(pool));
   });
 
   afterAll(async () => {

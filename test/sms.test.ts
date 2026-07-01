@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { readEnv } from "../src/env.js";
-import { MunjanaraSmsSender } from "../src/sms/sms-sender.js";
+import { MunjanaraSmsSender } from "../src/modules/auth/sms-sender.service.js";
 
 describe("SMS sender", () => {
-  it("reads memory sender as default and munjanara when explicitly configured", () => {
-    expect(readEnv({}).smsProvider).toBe("memory");
+  it("reads munjanara sender config", () => {
+    expect(readEnv({}).smsProvider).toBe("munjanara");
     expect(readEnv({ SMS_PROVIDER: "munjanara" }).smsProvider).toBe("munjanara");
     expect(readEnv({ R2_BUCKET: "chattea" }).r2Bucket).toBe("chattea");
     expect(readEnv({ SENTRY_DSN: "https://example@sentry.io/1" }).sentryDsn).toBe("https://example@sentry.io/1");
