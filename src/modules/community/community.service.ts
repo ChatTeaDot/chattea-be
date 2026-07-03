@@ -1,231 +1,146 @@
-import { dbQuery, sql, type Database } from "../../db/client.js";
+import { Injectable } from "@nestjs/common";
+import { CommunityRepository } from "./community.repository";
+import { CommunityCommentPayload, CommunityPostPayload } from "./community.types";
 
 const TITLE_MAX_LENGTH = 80;
 const BODY_MAX_LENGTH = 1000;
 const COMMENT_MAX_LENGTH = 500;
 const REPORT_REASON_MAX_LENGTH = 120;
 
-export type CommunityPost = {
-  id: string;
-  anonymousNickname: string;
-  title: string;
-  body: string;
-  commentCount: number;
-  createdAt: string;
-};
-
-export type CommunityComment = {
-  id: string;
-  postId: string;
-  anonymousNickname: string;
-  body: string;
-  createdAt: string;
-};
-
+@Injectable()
 export class CommunityService {
-  constructor(private readonly db: Database) {}
+  /**
+   * CommunityService에서 사용할 CommunityRepository 의존성을 주입한다.
+   *
+   * @param communityRepository 커뮤니티 저장소
+   */
+  constructor(private readonly communityRepository: CommunityRepository) {}
 
-  async listPosts(): Promise<CommunityPost[]> {
-    const result = await dbQuery<{
-      id: string;
-      anonymous_nickname: string;
-      title: string;
-      body: string;
-      comment_count: string;
-      created_at: Date;
-    }>(
-      this.db,
-      sql`
-        SELECT community_posts.id::text,
-               community_posts.anonymous_nickname,
-               community_posts.title,
-               community_posts.body,
-               COUNT(community_comments.id)::text AS comment_count,
-               community_posts.created_at
-        FROM community_posts
-        LEFT JOIN community_comments ON community_comments.post_id = community_posts.id
-        WHERE community_posts.deleted_at IS NULL
-        GROUP BY community_posts.id
-        ORDER BY community_posts.created_at DESC
-        LIMIT 50
-      `,
-    );
+  /**
+   * 커뮤니티 게시글 목록을 조회한다.
+   *
+   * @returns 게시글 목록
+   */
+  async posts(): Promise<CommunityPostPayload[]> {
+    const result = await this.communityRepository.posts();
 
-    return result.rows.map(rowToPost);
+    return result.map(rowToPost);
   }
 
-  async listComments(postId: string): Promise<CommunityComment[]> {
+  /**
+   * 커뮤니티 댓글 목록을 조회한다.
+   *
+   * @param postId 게시글 ID
+   * @returns 댓글 목록
+   */
+  async comments(postId: string): Promise<CommunityCommentPayload[]> {
     validateUuid(postId, "COMMUNITY_POST_ID_INVALID");
-    const result = await dbQuery<{
-      id: string;
-      post_id: string;
-      anonymous_nickname: string;
-      body: string;
-      created_at: Date;
-    }>(
-      this.db,
-      sql`
-        SELECT id::text, post_id::text, anonymous_nickname, body, created_at
-        FROM community_comments
-        WHERE post_id = ${postId}
-          AND deleted_at IS NULL
-        ORDER BY created_at ASC
-        LIMIT 100
-      `,
-    );
+    const result = await this.communityRepository.comments(postId);
 
-    return result.rows.map(rowToComment);
+    return result.map(rowToComment);
   }
 
-  async createPost(userId: string, input: { title: string; body: string }, now = new Date()): Promise<CommunityPost> {
+  /**
+   * 커뮤니티 게시글을 생성한다.
+   *
+   * @param userId 작성자 ID
+   * @param input 게시글 작성 입력값
+   * @returns 생성된 게시글
+   */
+  async createPost(userId: string, input: { title: string; body: string }): Promise<CommunityPostPayload> {
     validateUuid(userId, "USER_ID_INVALID");
-    const result = await dbQuery<{
-      id: string;
-      anonymous_nickname: string;
-      title: string;
-      body: string;
-      comment_count: string;
-      created_at: Date;
-    }>(
-      this.db,
-      sql`
-        INSERT INTO community_posts (author_user_id, anonymous_nickname, title, body, created_at, updated_at)
-        VALUES (
-          ${userId},
-          '익명' || nextval('community_anonymous_nickname_seq')::text,
-          ${validateText(input.title, TITLE_MAX_LENGTH, "COMMUNITY_TITLE")},
-          ${validateText(input.body, BODY_MAX_LENGTH, "COMMUNITY_BODY")},
-          ${now},
-          ${now}
-        )
-        RETURNING id::text, anonymous_nickname, title, body, '0' AS comment_count, created_at
-      `,
-    );
+    const post = await this.communityRepository.createPost({
+      userId,
+      title: validateText(input.title, TITLE_MAX_LENGTH, "COMMUNITY_TITLE"),
+      body: validateText(input.body, BODY_MAX_LENGTH, "COMMUNITY_BODY"),
+    });
 
-    return rowToPost(result.rows[0]!);
+    return rowToPost({ ...post, id: post.id, commentCount: "0" });
   }
 
-  async createComment(userId: string, postId: string, body: string, now = new Date()): Promise<CommunityComment> {
+  /**
+   * 커뮤니티 댓글을 생성한다.
+   *
+   * @param userId 작성자 ID
+   * @param postId 게시글 ID
+   * @param body 댓글 본문
+   * @returns 생성된 댓글
+   */
+  async createComment(userId: string, postId: string, body: string): Promise<CommunityCommentPayload> {
     validateUuid(userId, "USER_ID_INVALID");
     validateUuid(postId, "COMMUNITY_POST_ID_INVALID");
-    const result = await dbQuery<{
-      id: string;
-      post_id: string;
-      anonymous_nickname: string;
-      body: string;
-      created_at: Date;
-    }>(
-      this.db,
-      sql`
-        INSERT INTO community_comments (post_id, author_user_id, anonymous_nickname, body, created_at, updated_at)
-        SELECT ${postId}, ${userId}, '익명' || nextval('community_anonymous_nickname_seq')::text, ${validateText(body, COMMENT_MAX_LENGTH, "COMMUNITY_COMMENT")}, ${now}, ${now}
-        WHERE EXISTS (
-          SELECT 1
-          FROM community_posts
-          WHERE id = ${postId}
-            AND deleted_at IS NULL
-        )
-        RETURNING id::text, post_id::text, anonymous_nickname, body, created_at
-      `,
-    );
-
-    if (!result.rows[0]) {
-      throw new Error("COMMUNITY_POST_NOT_FOUND");
-    }
-
-    return rowToComment(result.rows[0]);
+    if (!(await this.communityRepository.findPost(postId))) throw new Error("COMMUNITY_POST_NOT_FOUND");
+    const comment = await this.communityRepository.createComment({
+      userId,
+      postId,
+      body: validateText(body, COMMENT_MAX_LENGTH, "COMMUNITY_COMMENT"),
+    });
+    return rowToComment(comment);
   }
 
+  /**
+   * 커뮤니티 게시글을 신고한다.
+   *
+   * @param userId 신고자 ID
+   * @param postId 신고 대상 게시글 ID
+   * @param reason 신고 사유
+   * @returns 처리 성공 여부
+   */
   async reportPost(userId: string, postId: string, reason: string): Promise<boolean> {
     validateUuid(userId, "USER_ID_INVALID");
     validateUuid(postId, "COMMUNITY_POST_ID_INVALID");
-    await dbQuery(
-      this.db,
-      sql`
-        INSERT INTO community_post_reports (post_id, reporter_user_id, reason)
-        VALUES (${postId}, ${userId}, ${validateText(reason, REPORT_REASON_MAX_LENGTH, "COMMUNITY_REPORT_REASON")})
-        ON CONFLICT (post_id, reporter_user_id)
-        DO UPDATE SET reason = EXCLUDED.reason, created_at = now()
-      `,
-    );
+    await this.communityRepository.reportPost({
+      userId,
+      postId,
+      reason: validateText(reason, REPORT_REASON_MAX_LENGTH, "COMMUNITY_REPORT_REASON"),
+    });
     return true;
   }
 }
 
-function validateText(input: string, maxLength: number, field: string): string {
+type PostRow = {
+  id: string;
+  anonymousName: string;
+  title: string;
+  body: string;
+  commentCount: number | string;
+  createdAt: Date;
+};
+
+type CommentRow = {
+  id: string;
+  postId: string;
+  anonymousName: string;
+  body: string;
+  createdAt: Date;
+};
+
+const validateText = (input: string, maxLength: number, field: string): string => {
   const value = input.trim();
-  if (!value) {
-    throw new Error(`${field}_REQUIRED`);
-  }
-
-  if (value.length > maxLength) {
-    throw new Error(`${field}_TOO_LONG`);
-  }
-
+  if (!value) throw new Error(`${field}_REQUIRED`);
+  if (value.length > maxLength) throw new Error(`${field}_TOO_LONG`);
   return value;
-}
+};
 
-function validateUuid(input: string, error: string): void {
+const validateUuid = (input: string, error: string): void => {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input)) {
     throw new Error(error);
   }
-}
+};
 
-function buildAnonymousNickname(index: number): string {
-  return `익명${index}`;
-}
+const rowToPost = (row: PostRow): CommunityPostPayload => ({
+  id: row.id,
+  anonymousName: row.anonymousName,
+  title: row.title,
+  body: row.body,
+  commentCount: Number(row.commentCount),
+  createdAt: row.createdAt.toISOString(),
+});
 
-function stripPostAuthor(post: CommunityPost & { authorUserId: string }): CommunityPost {
-  return {
-    id: post.id,
-    anonymousNickname: post.anonymousNickname,
-    title: post.title,
-    body: post.body,
-    commentCount: post.commentCount,
-    createdAt: post.createdAt,
-  };
-}
-
-function stripCommentAuthor(comment: CommunityComment & { authorUserId: string }): CommunityComment {
-  return {
-    id: comment.id,
-    postId: comment.postId,
-    anonymousNickname: comment.anonymousNickname,
-    body: comment.body,
-    createdAt: comment.createdAt,
-  };
-}
-
-function rowToPost(row: {
-  id: string;
-  anonymous_nickname: string;
-  title: string;
-  body: string;
-  comment_count: string;
-  created_at: Date;
-}): CommunityPost {
-  return {
-    id: row.id,
-    anonymousNickname: row.anonymous_nickname,
-    title: row.title,
-    body: row.body,
-    commentCount: Number(row.comment_count),
-    createdAt: row.created_at.toISOString(),
-  };
-}
-
-function rowToComment(row: {
-  id: string;
-  post_id: string;
-  anonymous_nickname: string;
-  body: string;
-  created_at: Date;
-}): CommunityComment {
-  return {
-    id: row.id,
-    postId: row.post_id,
-    anonymousNickname: row.anonymous_nickname,
-    body: row.body,
-    createdAt: row.created_at.toISOString(),
-  };
-}
+const rowToComment = (row: CommentRow): CommunityCommentPayload => ({
+  id: row.id,
+  postId: row.postId,
+  anonymousName: row.anonymousName,
+  body: row.body,
+  createdAt: row.createdAt.toISOString(),
+});

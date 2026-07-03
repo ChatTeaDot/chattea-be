@@ -1,321 +1,182 @@
-import { dbQuery, sql, type Database } from "../../db/client.js";
-import { ChatEventBus } from "./chat-events.service.js";
+import { Injectable } from "@nestjs/common";
+import { ChatRepository } from "./chat.repository";
+import { ChatMessagePayload, ChatRoomPayload } from "./chat.types";
 
 const FIRST_MESSAGE_MAX_LENGTH = 30;
 const MESSAGE_MAX_LENGTH = 90;
 const REPORT_REASON_MAX_LENGTH = 120;
 
-export type Room = {
-  id: string;
-  name: string;
-  lastMessage: string;
-};
-
-export type Message = {
-  id: string;
-  roomId: string;
-  text: string;
-  idempotencyKey: string | null;
-  createdAt: string;
-};
-
+@Injectable()
 export class ChatService {
-  constructor(
-    private readonly db: Database,
-    private readonly events: ChatEventBus = new ChatEventBus(),
-  ) {}
+  /**
+   * ChatService에서 사용할 ChatRepository 의존성을 주입한다.
+   *
+   * @param chatRepository 채팅 저장소
+   */
+  constructor(private readonly chatRepository: ChatRepository) {}
 
-  async listRooms(): Promise<Room[]> {
-    const result = await dbQuery<{
-      id: string;
-      name: string;
-      last_message: string | null;
-    }>(
-      this.db,
-      sql`
-        SELECT rooms.id::text, rooms.name, latest.text AS last_message
-        FROM rooms
-        LEFT JOIN LATERAL (
-          SELECT text
-          FROM messages
-          WHERE messages.room_id = rooms.id
-            AND messages.deleted_at IS NULL
-          ORDER BY created_at DESC
-          LIMIT 1
-        ) latest ON true
-        ORDER BY rooms.updated_at DESC
-      `,
-    );
+  /**
+   * 채팅방 목록을 조회한다.
+   *
+   * @returns 채팅방 목록
+   */
+  async rooms(): Promise<ChatRoomPayload[]> {
+    const result = await this.chatRepository.rooms();
 
-    return result.rows.map((room) => ({
+    return result.map((room) => ({
       id: room.id,
       name: room.name,
-      lastMessage: room.last_message ?? "",
+      lastMessage: room.lastMessage ?? "",
     }));
   }
 
-  async listMessages(input: {
-    roomId: string;
-    first?: number | null;
-    after?: string | null;
-  }): Promise<Message[]> {
-    this.validateUuid(input.roomId);
+  /**
+   * 채팅방 메시지를 페이지 단위로 조회한다.
+   *
+   * @param input 채팅방 ID와 페이지 입력값
+   * @returns 메시지 목록
+   */
+  async messages(input: { roomId: string; first?: number | null; after?: string | null }): Promise<ChatMessagePayload[]> {
+    this.validateUuid(input.roomId, "ROOM_ID_INVALID");
     const limit = Math.min(input.first ?? 50, 100);
-    const cursor = input.after
-      ? await dbQuery<{ created_at: Date }>(
-          this.db,
-          sql`SELECT created_at FROM messages WHERE id = ${input.after}`,
-        )
-      : null;
-    const result = await dbQuery<{
-      id: string;
-      room_id: string;
-      text: string;
-      idempotency_key: string | null;
-      created_at: Date;
-    }>(
-      this.db,
-      sql`
-        SELECT id::text, room_id::text, text, idempotency_key, created_at
-        FROM messages
-        WHERE room_id = ${input.roomId}
-          AND deleted_at IS NULL
-          AND (${cursor?.rows[0]?.created_at ?? null}::timestamptz IS NULL OR created_at > ${cursor?.rows[0]?.created_at ?? null})
-        ORDER BY created_at ASC
-        LIMIT ${limit}
-      `,
-    );
+    const cursor = input.after ? await this.chatRepository.findMessageCursor(input.after) : null;
+    const result = await this.chatRepository.messages({ roomId: input.roomId, limit, after: cursor?.createdAt });
 
-    return result.rows.map(rowToMessage);
+    return result.map(rowToMessage);
   }
 
-  async sendMessage(
-    input: { roomId: string; text: string; idempotencyKey?: string | null },
-    now = new Date(),
-  ): Promise<Message> {
+  /**
+   * 메시지를 전송한다.
+   *
+   * @param input 메시지 전송 입력값
+   * @returns 생성되었거나 idempotency key로 조회된 메시지
+   */
+  async sendMessage(input: { roomId: string; text: string; idempotencyKey?: string | null }): Promise<ChatMessagePayload> {
     const text = this.validateText(input.text);
-    this.validateUuid(input.roomId);
-
-    await dbQuery(
-      this.db,
-      sql`INSERT INTO rooms (id, name) VALUES (${input.roomId}, '대화') ON CONFLICT (id) DO NOTHING`,
-    );
+    this.validateUuid(input.roomId, "ROOM_ID_INVALID");
+    await this.chatRepository.ensureRoom(input.roomId);
 
     if (input.idempotencyKey) {
-      const existing = await dbQuery<{
-        id: string;
-        room_id: string;
-        text: string;
-        idempotency_key: string | null;
-        created_at: Date;
-      }>(
-        this.db,
-        sql`SELECT id::text, room_id::text, text, idempotency_key, created_at FROM messages WHERE idempotency_key = ${input.idempotencyKey}`,
-      );
-      if (existing.rows[0]) {
-        return rowToMessage(existing.rows[0]);
-      }
+      const existing = await this.chatRepository.findMessageByIdempotencyKey(input.idempotencyKey);
+      if (existing) return rowToMessage(existing);
     }
 
-    const count = await dbQuery<{ count: string }>(
-      this.db,
-      sql`SELECT COUNT(*)::text AS count FROM messages WHERE room_id = ${input.roomId} AND deleted_at IS NULL`,
-    );
-    validateFirstMessageText(text, count.rows[0]?.count === "0");
+    const count = await this.chatRepository.activeMessageCount(input.roomId);
+    if (count === 0 && text.length > FIRST_MESSAGE_MAX_LENGTH) {
+      throw new Error("FIRST_MESSAGE_TEXT_TOO_LONG");
+    }
 
-    const result = await dbQuery<{
-      id: string;
-      room_id: string;
-      text: string;
-      idempotency_key: string | null;
-      created_at: Date;
-    }>(
-      this.db,
-      sql`
-        INSERT INTO messages (room_id, text, idempotency_key, created_at, updated_at)
-        VALUES (${input.roomId}, ${text}, ${input.idempotencyKey ?? null}, ${now}, ${now})
-        RETURNING id::text, room_id::text, text, idempotency_key, created_at
-      `,
-    );
-    await dbQuery(this.db, sql`UPDATE rooms SET updated_at = ${now} WHERE id = ${input.roomId}`);
-    const message = rowToMessage(result.rows[0]!);
-
-    this.events.publish("messageCreated", { ...message });
-    return message;
+    return rowToMessage(await this.chatRepository.createMessage({ ...input, text }));
   }
 
-  async editMessage(input: { messageId: string; text: string }): Promise<Message> {
+  /**
+   * 메시지를 수정한다.
+   *
+   * @param input 메시지 수정 입력값
+   * @returns 수정된 메시지
+   */
+  async editMessage(input: { messageId: string; text: string }): Promise<ChatMessagePayload> {
     const text = this.validateText(input.text);
-    const result = await dbQuery<{
-      id: string;
-      room_id: string;
-      text: string;
-      idempotency_key: string | null;
-      created_at: Date;
-    }>(
-      this.db,
-      sql`
-        UPDATE messages
-        SET text = ${text}, updated_at = now()
-        WHERE id = ${input.messageId} AND deleted_at IS NULL
-        RETURNING id::text, room_id::text, text, idempotency_key, created_at
-      `,
-    );
-
-    if (!result.rows[0]) {
-      throw new Error("MESSAGE_NOT_FOUND");
-    }
-
-    const message = rowToMessage(result.rows[0]);
-    await dbQuery(this.db, sql`UPDATE rooms SET updated_at = now() WHERE id = ${message.roomId}`);
-    this.events.publish("messageUpdated", { ...message });
-    return message;
+    const message = await this.chatRepository.editMessage({ messageId: input.messageId, text });
+    if (!message) throw new Error("MESSAGE_NOT_FOUND");
+    return rowToMessage(message);
   }
 
+  /**
+   * 메시지를 삭제한다.
+   *
+   * @param messageId 삭제할 메시지 ID
+   * @returns 삭제 성공 여부
+   */
   async deleteMessage(messageId: string): Promise<boolean> {
-    const result = await dbQuery<{ room_id: string }>(
-      this.db,
-      sql`UPDATE messages SET deleted_at = now(), updated_at = now() WHERE id = ${messageId} AND deleted_at IS NULL RETURNING room_id::text`,
-    );
-
-    if (!result.rows[0]) {
-      return false;
-    }
-
-    this.events.publish("messageDeleted", {
-      roomId: result.rows[0].room_id,
-      messageId,
-    });
-    return true;
+    return Boolean(await this.chatRepository.deleteMessage(messageId));
   }
 
+  /**
+   * 채팅방 읽음 처리를 검증한다.
+   *
+   * @param roomId 채팅방 ID
+   * @returns 채팅방 존재 여부
+   */
   async markRoomRead(roomId: string): Promise<boolean> {
-    this.validateUuid(roomId);
-    const room = await dbQuery(this.db, sql`SELECT 1 FROM rooms WHERE id = ${roomId}`);
-    if (!room.rows[0]) {
-      return false;
-    }
+    this.validateUuid(roomId, "ROOM_ID_INVALID");
+    return Boolean(await this.chatRepository.findRoom(roomId));
+  }
 
-    this.events.publish("readReceiptUpdated", { roomId, read: true });
+  /**
+   * 타이핑 상태를 검증한다.
+   *
+   * @param input 채팅방 ID와 타이핑 여부
+   * @returns 처리 성공 여부
+   */
+  setTyping(input: { roomId: string; typing: boolean }): boolean {
+    this.validateUuid(input.roomId, "ROOM_ID_INVALID");
     return true;
   }
 
-  async isRoomRead(roomId: string): Promise<boolean> {
-    this.validateUuid(roomId);
-    const room = await dbQuery(this.db, sql`SELECT 1 FROM rooms WHERE id = ${roomId}`);
-    return Boolean(room.rows[0]);
-  }
-
-  setTyping(roomId: string, typing: boolean): boolean {
-    this.validateUuid(roomId);
-    this.events.publish("typingChanged", { roomId, typing });
-    return true;
-  }
-
+  /**
+   * 사용자를 차단한다.
+   *
+   * @param blockerUserId 차단한 사용자 ID
+   * @param blockedUserId 차단된 사용자 ID
+   * @returns 처리 성공 여부
+   */
   async blockUser(blockerUserId: string, blockedUserId: string): Promise<boolean> {
-    this.validateUuid(blockerUserId);
-    this.validateUuid(blockedUserId);
-    if (blockerUserId === blockedUserId) {
-      throw new Error("BLOCK_SELF_NOT_ALLOWED");
-    }
-
-    await dbQuery(
-      this.db,
-      sql`
-        INSERT INTO user_blocks (blocker_user_id, blocked_user_id)
-        VALUES (${blockerUserId}, ${blockedUserId})
-        ON CONFLICT (blocker_user_id, blocked_user_id) DO NOTHING
-      `,
-    );
+    this.validateUuid(blockerUserId, "USER_ID_INVALID");
+    this.validateUuid(blockedUserId, "USER_ID_INVALID");
+    if (blockerUserId === blockedUserId) throw new Error("BLOCK_SELF_NOT_ALLOWED");
+    await this.chatRepository.blockUser(blockerUserId, blockedUserId);
     return true;
   }
 
+  /**
+   * 메시지를 신고한다.
+   *
+   * @param reporterUserId 신고한 사용자 ID
+   * @param messageId 신고 대상 메시지 ID
+   * @param reason 신고 사유
+   * @returns 처리 성공 여부
+   */
   async reportMessage(reporterUserId: string, messageId: string, reason: string): Promise<boolean> {
-    this.validateUuid(reporterUserId);
-    this.validateUuid(messageId);
-    await dbQuery(
-      this.db,
-      sql`
-        INSERT INTO message_reports (message_id, reporter_user_id, reason)
-        VALUES (${messageId}, ${reporterUserId}, ${validateReportReason(reason)})
-        ON CONFLICT (message_id, reporter_user_id)
-        DO UPDATE SET reason = EXCLUDED.reason, created_at = now()
-      `,
-    );
+    this.validateUuid(reporterUserId, "USER_ID_INVALID");
+    this.validateUuid(messageId, "MESSAGE_ID_INVALID");
+    await this.chatRepository.reportMessage(reporterUserId, messageId, validateReportReason(reason));
     return true;
-  }
-
-  subscribeMessageCreated(roomId: string) {
-    return this.events.subscribe("messageCreated", roomId);
-  }
-
-  subscribeMessageUpdated(roomId: string) {
-    return this.events.subscribe("messageUpdated", roomId);
-  }
-
-  subscribeMessageDeleted(roomId: string) {
-    return this.events.subscribe("messageDeleted", roomId);
-  }
-
-  subscribeTypingChanged(roomId: string) {
-    return this.events.subscribe("typingChanged", roomId);
-  }
-
-  subscribeReadReceiptUpdated(roomId: string) {
-    return this.events.subscribe("readReceiptUpdated", roomId);
   }
 
   private validateText(input: string): string {
     const text = input.trim();
-    if (!text) {
-      throw new Error("MESSAGE_TEXT_REQUIRED");
-    }
-
-    if (text.length > MESSAGE_MAX_LENGTH) {
-      throw new Error("MESSAGE_TEXT_TOO_LONG");
-    }
-
+    if (!text) throw new Error("MESSAGE_TEXT_REQUIRED");
+    if (text.length > MESSAGE_MAX_LENGTH) throw new Error("MESSAGE_TEXT_TOO_LONG");
     return text;
   }
 
-  private validateUuid(input: string): void {
+  private validateUuid(input: string, error: string): void {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input)) {
-      throw new Error("ROOM_ID_INVALID");
+      throw new Error(error);
     }
   }
 }
 
-function validateFirstMessageText(text: string, isFirstMessage: boolean): void {
-  if (isFirstMessage && text.length > FIRST_MESSAGE_MAX_LENGTH) {
-    throw new Error("FIRST_MESSAGE_TEXT_TOO_LONG");
-  }
-}
-
-function validateReportReason(input: string): string {
-  const reason = input.trim();
-  if (!reason) {
-    throw new Error("REPORT_REASON_REQUIRED");
-  }
-
-  if (reason.length > REPORT_REASON_MAX_LENGTH) {
-    throw new Error("REPORT_REASON_TOO_LONG");
-  }
-
-  return reason;
-}
-
-function rowToMessage(row: {
+type MessageRow = {
   id: string;
-  room_id: string;
+  roomId: string;
   text: string;
-  idempotency_key: string | null;
-  created_at: Date;
-}): Message {
-  return {
-    id: row.id,
-    roomId: row.room_id,
-    text: row.text,
-    idempotencyKey: row.idempotency_key,
-    createdAt: row.created_at.toISOString(),
-  };
-}
+  idempotencyKey: string | null;
+  createdAt: Date;
+};
+
+const validateReportReason = (input: string): string => {
+  const reason = input.trim();
+  if (!reason) throw new Error("REPORT_REASON_REQUIRED");
+  if (reason.length > REPORT_REASON_MAX_LENGTH) throw new Error("REPORT_REASON_TOO_LONG");
+  return reason;
+};
+
+const rowToMessage = (row: MessageRow): ChatMessagePayload => ({
+  id: row.id,
+  roomId: row.roomId,
+  text: row.text,
+  idempotencyKey: row.idempotencyKey ?? undefined,
+  createdAt: row.createdAt.toISOString(),
+});
