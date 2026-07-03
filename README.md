@@ -1,70 +1,135 @@
-# chattea-be
+<p align="center">
+  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="200" alt="Nest Logo" /></a>
+</p>
 
-ChatTea backend. Node.js + TypeScript GraphQL API.
+[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
+[circleci-url]: https://circleci.com/gh/nestjs/nest
 
-## Run
+  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
+    <p align="center">
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
+<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
+<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
+<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
+<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
+<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
+<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
+  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
+    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
+  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
+</p>
+  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
+  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
-```sh
-pnpm install
-pnpm run dev
+## Description
+
+[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+
+## Installation
+
+```bash
+$ npm install
 ```
 
-Health check:
+## Migrations
 
-```sh
-curl http://localhost:4000/healthz
+Start local Postgres with Docker:
+
+```bash
+$ pnpm db:up
 ```
 
-GraphQL endpoint:
+Run database migrations during deploy, before starting the new app version. CI/CD or the release operator should run this once per deploy:
 
-```txt
-http://localhost:4000/graphql
+```bash
+$ pnpm migrate
 ```
 
-## Checks
+The runner applies `migrations/*.sql` in filename order and records checksums in `_migrations`. If an applied SQL file changes, deploy fails instead of re-running it.
 
-```sh
-pnpm test
-pnpm run typecheck
+Set `POSTGRES_SSL=true` for managed Postgres providers that require SSL.
+
+### Migration Rehearsal
+
+Use staging or a production snapshot before the production deploy:
+
+```bash
+$ POSTGRES_DATABASE=staging_db pnpm migrate
+$ psql "$DATABASE_URL" -c 'select "name", "appliedAt" from "_migrations" order by "name";'
+$ npm run start:prod
 ```
 
-## Docker
+Rollback plan: restore the DB snapshot or managed-provider point-in-time backup. Do not edit an already-applied SQL file; add a new migration instead.
 
-```sh
-docker compose up --build
+## SMS Provider
+
+Set `SMS_PROVIDER_URL` to enable the HTTP SMS sender. In production, `SMS_PROVIDER_AUTHORIZATION` is required.
+
+The default HTTP payload is generic:
+
+```json
+{ "to": "+821012345678", "text": "[Demo] 인증번호는 123456입니다.", "senderId": "sender" }
 ```
 
-## Current scope
+Match this payload and headers to the actual provider before production.
 
-- Korean phone normalization.
-- Phone code hash/expiry verification.
-- One-time phone code verification; replay returns `PHONE_CODE_ALREADY_USED`.
-- Verification locks after five failed code attempts until the code expires.
-- Phone resend, phone-hourly, and IP-hourly rate limits.
-- Phone signup/login GraphQL flow.
-- Server-side signup nickname validation: required and max 20 chars.
-- Server-side profile intro validation: max 60 chars.
-- Session store with `Authorization: Bearer` -> `me` lookup; PostgreSQL-backed when `DATABASE_URL` is set.
-- Kakao REST profile adapter for `loginWithKakao`, phone-required payload, and verified phone linking.
-- Full v1 GraphQL operation names.
-- In-memory SMS sender for local/test and Munjanara SMS sender for prod-style config.
-- GraphQL integration test for request/verify/complete/login.
-- Auth guard for chat and upload GraphQL operations; unauthenticated requests return `AUTH_REQUIRED`.
-- Match candidate listing plus `likeUser`; mutual likes create a chat room with both members in PostgreSQL.
-- Subscription plan catalog query with documented Free/Basic/Gold/Black prices and benefits.
-- AI summary eligibility/preview rules for Gold/Black unread messages: enabled only, 30+ chars, latest 180 chars.
-- Anonymous community posts/comments/reports; public responses use anonymous nicknames while PostgreSQL keeps author IDs for moderation.
-- Profile rating storage with 1-5 score constraint and one upserted rating per rater/rated pair; match candidates do not expose scores.
-- In-memory chat rooms/messages with idempotent `sendMessage`, `editMessage`, `deleteMessage`, `markRoomRead`.
-- User blocking and message reporting mutations with PostgreSQL persistence.
-- Server-side message text limits: first message 30 chars, general messages 90 chars.
-- GraphQL `setTyping` mutation and session-authenticated WebSocket subscriptions for message/read/typing events.
-- Upload signing service behind a signer interface, with dev signer for local/test and Cloudflare R2 signer for configured env.
-- PII redaction for phone, code, signupToken, session/auth token, message/file content in logs and observability reporter payloads.
-- First-party Sentry (`SENTRY_DSN`) and Datadog APM (`DATADOG_APM_ENABLED=true`) initialization.
-- PostgreSQL initial schema migration for users, profile intro, auth, phone verification, signup tokens, sessions, rooms, messages, attachments, read receipts, blocks, and reports.
-- PostgreSQL-backed auth, phone verification, signup token, session, room, and message runtime when `DATABASE_URL` is set.
-- Production env guard: `SERVICE_ENV=production` requires `DATABASE_URL`, non-default `PHONE_CODE_PEPPER`, Munjanara SMS env, and Cloudflare R2 env before startup.
-- Dockerfile plus root Docker Compose scaffold for BE and private Postgres.
+## Datadog Logs
 
-Not yet wired: production Datadog Agent/VPS log forwarding.
+The app writes JSON logs to stdout/stderr with Datadog-friendly fields:
+
+```bash
+DD_SERVICE=demo-backend
+DD_ENV=production
+DD_VERSION=<git-sha-or-release>
+```
+
+Configure the Datadog Agent or platform log drain to collect container stdout/stderr. No app-side Datadog API key is needed for log collection.
+
+## Running the app
+
+```bash
+# local DB
+$ pnpm db:up
+$ pnpm migrate
+
+# development
+$ npm run start
+
+# watch mode
+$ npm run start:dev
+
+# production mode
+$ npm run start:prod
+```
+
+## Test
+
+```bash
+# unit tests
+$ npm run test
+
+# e2e tests
+$ npm run test:e2e
+
+# test coverage
+$ npm run test:cov
+```
+
+`src/modules/auth/auth-flows.spec.ts` is service-flow coverage for phone signup, signin/refresh/logout, and Kakao phone signup. It is not HTTP e2e; it does not verify GraphQL resolver wiring, cookies, guards, or CORS.
+
+`test/auth-flows.e2e-spec.ts` is HTTP e2e coverage for GraphQL auth flows, cookies, refresh guard wiring, Kakao OAuth state rejection, and CORS headers.
+
+## Support
+
+Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+
+## Stay in touch
+
+- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
+- Website - [https://nestjs.com](https://nestjs.com/)
+- Twitter - [@nestframework](https://twitter.com/nestframework)
+
+## License
+
+Nest is [MIT licensed](LICENSE).

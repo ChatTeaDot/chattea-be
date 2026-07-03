@@ -1,6 +1,0 @@
-allowBuilds:
-  "@datadog/native-appsec": true
-  "@datadog/native-iast-taint-tracking": true
-  "@datadog/native-metrics": true
-  "@datadog/pprof": true
-  esbuild: true
