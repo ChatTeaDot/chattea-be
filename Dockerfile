@@ -1,4 +1,4 @@
-FROM node:24-slim AS build
+FROM node:24-alpine AS build
 
 WORKDIR /app
 
@@ -13,10 +13,13 @@ COPY migrations ./migrations
 RUN pnpm run build
 RUN pnpm prune --prod
 
-FROM node:24-slim
+FROM node:24-alpine
 
 ENV NODE_ENV=production
 WORKDIR /app
+
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/pnpm /usr/local/bin/pnpx
 
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
@@ -27,4 +30,4 @@ COPY --from=build /app/migrations ./migrations
 USER node
 EXPOSE 4000
 
-CMD ["sh", "-c", "node --env-file-if-exists=.env dist/scripts/migrate.js && node dist/main.js"]
+CMD ["sh", "-c", "node --env-file-if-exists=.env dist/scripts/migrate.js && node dist/src/main.js"]
