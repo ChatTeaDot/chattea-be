@@ -1,20 +1,71 @@
+name: chattea
+
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: demo-backend-postgres
+  chattea-be:
+    container_name: chattea-be
+    build:
+      context: .
     environment:
-      POSTGRES_USER: ${POSTGRES_USERNAME:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DATABASE:-chatty_bo}
+      NODE_ENV: production
+      PORT: 4000
+      DD_SERVICE: chattea-be
+      DD_ENV: ${SERVICE_ENV:-development}
+      DD_VERSION: ${SERVICE_VERSION:-dev}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USERNAME: chattea
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chattea-dev}
+      POSTGRES_DATABASE: chattea
+      JWT_ACCESS_TOKEN_SECRET: ${JWT_ACCESS_TOKEN_SECRET:-dev-access-secret}
+      JWT_REFRESH_TOKEN_SECRET: ${JWT_REFRESH_TOKEN_SECRET:-dev-refresh-secret}
+      JWT_ACCESS_TOKEN_EXP: ${JWT_ACCESS_TOKEN_EXP:-15m}
+      JWT_REFRESH_TOKEN_EXP: ${JWT_REFRESH_TOKEN_EXP:-30d}
+      SIGNUP_TOKEN_SECRET: ${SIGNUP_TOKEN_SECRET:-dev-signup-secret}
+      KAKAO_SIGNUP_TOKEN_SECRET: ${KAKAO_SIGNUP_TOKEN_SECRET:-dev-kakao-signup-secret}
+      PHONE_CODE_PEPPER: ${PHONE_CODE_PEPPER:-dev-only-pepper}
+      SMS_PROVIDER_URL: ${SMS_PROVIDER_URL:-}
+      SMS_PROVIDER_AUTHORIZATION: ${SMS_PROVIDER_AUTHORIZATION:-}
+      SMS_SENDER_ID: ${SMS_SENDER_ID:-dev-sender}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      CLIENT_URL: ${CLIENT_URL:-http://localhost:8081}
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "4000:4000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  postgres:
+    container_name: chattea-postgres
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: chattea
+      POSTGRES_USER: chattea
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chattea-dev}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USERNAME:-postgres} -d ${POSTGRES_DATABASE:-chatty_bo}"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U chattea -d chattea"]
+      interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
 
 volumes:
   postgres-data:
