@@ -1,6 +1,11 @@
 {
   "editor.defaultFormatter": "esbenp.prettier-vscode",
   "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "always"
+  },
+  "files.autoSave": "afterDelay",
+  "files.autoSaveDelay": 1000,
   "js/ts.tsdk.promptToUseWorkspaceVersion": true,
   "js/ts.tsdk.path": "/Users/cyjoon/Documents/GitHub/chattea-workspace/chattea-be/node_modules/typescript/lib",
   "eslint.validate": ["javascript", "typescript"],
