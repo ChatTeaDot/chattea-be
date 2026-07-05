@@ -28,8 +28,19 @@ export class DevSmsSender implements SmsSender {
 export class HttpSmsSender implements SmsSender {
   private readonly logger = new Logger(HttpSmsSender.name);
 
+  /**
+   * HttpSmsSender에서 사용할 ConfigService 의존성을 주입한다.
+   *
+   * @param configService 환경 설정 서비스
+   */
   constructor(private readonly configService: ConfigService) {}
 
+  /**
+   * HTTP SMS provider로 인증 코드를 발송한다.
+   *
+   * @param phoneE164 E.164 전화번호
+   * @param code 인증 코드
+   */
   sendCode = async (phoneE164: string, code: string): Promise<void> => {
     const url = this.configService.getOrThrow<string>("SMS_PROVIDER_URL");
     const authorization = this.configService.get<string>("SMS_PROVIDER_AUTHORIZATION");
@@ -54,6 +65,13 @@ export class HttpSmsSender implements SmsSender {
     }
   };
 
+  /**
+   * SMS provider에 POST 요청을 보낸다.
+   *
+   * @param url provider URL
+   * @param body 요청 body
+   * @param timeoutMs 요청 timeout(ms)
+   */
   private post = async (url: string, body: string, timeoutMs: number) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);

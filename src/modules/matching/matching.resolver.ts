@@ -2,9 +2,8 @@ import { Args, Context, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { UseGuards } from "@nestjs/common";
 import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
-import { SubscriptionService } from "src/modules/subscription/subscription.service";
 import { MatchingService } from "./matching.service";
-import { LikeUserPayload, MatchCandidatePayload } from "./matching.types";
+import { LikeUserPayload, MatchCandidatePayload, RateScoreInput, ScoreSummaryPayload } from "./matching.types";
 
 @Resolver()
 export class MatchingResolver {
@@ -12,12 +11,8 @@ export class MatchingResolver {
    * MatchingResolver에서 사용할 서비스 의존성을 주입한다.
    *
    * @param matchingService 매칭 서비스
-   * @param subscriptionService 구독 서비스
    */
-  constructor(
-    private readonly matchingService: MatchingService,
-    private readonly subscriptionService: SubscriptionService,
-  ) {}
+  constructor(private readonly matchingService: MatchingService) {}
 
   /**
    * 현재 사용자의 매칭 후보 목록을 조회한다.
@@ -40,8 +35,7 @@ export class MatchingResolver {
   @UseGuards(JwtAccessTokenGuard)
   @Query(() => [MatchCandidatePayload])
   async blackMatchCandidates(@Context("req") req: AuthRequest) {
-    const subscription = await this.subscriptionService.current(req.user.userId);
-    return this.matchingService.blackCandidates(req.user.userId, subscription.planId);
+    return this.matchingService.blackCandidates(req.user.userId);
   }
 
   /**
@@ -53,8 +47,7 @@ export class MatchingResolver {
   @UseGuards(JwtAccessTokenGuard)
   @Query(() => [MatchCandidatePayload])
   async likedMeCandidates(@Context("req") req: AuthRequest) {
-    const subscription = await this.subscriptionService.current(req.user.userId);
-    return this.matchingService.likedMeCandidates(req.user.userId, subscription.planId);
+    return this.matchingService.likedMeCandidates(req.user.userId);
   }
 
   /**
@@ -67,7 +60,31 @@ export class MatchingResolver {
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => LikeUserPayload)
   async likeUser(@Context("req") req: AuthRequest, @Args("userId") userId: string) {
-    const subscription = await this.subscriptionService.current(req.user.userId);
-    return this.matchingService.likeUser(req.user.userId, userId, subscription.planId);
+    return this.matchingService.likeUser(req.user.userId, userId);
+  }
+
+  /**
+   * 점수 요약을 조회한다.
+   *
+   * @param userId 채점 대상 사용자 ID
+   * @returns 점수 요약
+   */
+  @UseGuards(JwtAccessTokenGuard)
+  @Query(() => ScoreSummaryPayload)
+  scoreSummary(@Args("userId") userId: string) {
+    return this.matchingService.scoreSummary(userId);
+  }
+
+  /**
+   * 점수를 등록하거나 갱신한다.
+   *
+   * @param req 인증 요청 객체
+   * @param input 점수 입력값
+   * @returns 점수 요약
+   */
+  @UseGuards(JwtAccessTokenGuard)
+  @Mutation(() => ScoreSummaryPayload)
+  rateScore(@Context("req") req: AuthRequest, @Args("input") input: RateScoreInput) {
+    return this.matchingService.rateScore(req.user.userId, input.userId, input.score);
   }
 }

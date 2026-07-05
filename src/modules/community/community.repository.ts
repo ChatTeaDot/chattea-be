@@ -1,7 +1,7 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, asc, count, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Database, DRIZZLE } from "src/modules/database/database.module";
-import { communityComments, communityPostReports, communityPosts } from "src/modules/database/schema";
+import { communityComments, communityPostReports, communityPosts, communityProfiles } from "src/modules/database/schema";
 
 @Injectable()
 export class CommunityRepository {
@@ -16,7 +16,7 @@ export class CommunityRepository {
     return this.db
       .select({
         id: communityPosts.id,
-        anonymousName: communityPosts.anonymousName,
+        authorName: sql<string>`coalesce(${communityProfiles.name}, '익명')`,
         title: communityPosts.title,
         body: communityPosts.body,
         commentCount: count(communityComments.id),
@@ -24,8 +24,9 @@ export class CommunityRepository {
       })
       .from(communityPosts)
       .leftJoin(communityComments, eq(communityComments.postId, communityPosts.id))
+      .leftJoin(communityProfiles, eq(communityProfiles.userId, communityPosts.authorUserId))
       .where(isNull(communityPosts.deletedAt))
-      .groupBy(communityPosts.id)
+      .groupBy(communityPosts.id, communityProfiles.name)
       .orderBy(desc(communityPosts.createdAt))
       .limit(50);
   }
@@ -41,11 +42,12 @@ export class CommunityRepository {
       .select({
         id: communityComments.id,
         postId: communityComments.postId,
-        anonymousName: communityComments.anonymousName,
+        authorName: sql<string>`coalesce(${communityProfiles.name}, '익명')`,
         body: communityComments.body,
         createdAt: communityComments.createdAt,
       })
       .from(communityComments)
+      .leftJoin(communityProfiles, eq(communityProfiles.userId, communityComments.authorUserId))
       .where(and(eq(communityComments.postId, postId), isNull(communityComments.deletedAt)))
       .orderBy(asc(communityComments.createdAt))
       .limit(100);
@@ -62,7 +64,6 @@ export class CommunityRepository {
       .insert(communityPosts)
       .values({
         authorUserId: input.userId,
-        anonymousName: "익명",
         title: input.title,
         body: input.body,
       })
@@ -95,7 +96,6 @@ export class CommunityRepository {
       .values({
         postId: input.postId,
         authorUserId: input.userId,
-        anonymousName: "익명",
         body: input.body,
       })
       .returning();
@@ -121,5 +121,34 @@ export class CommunityRepository {
         target: [communityPostReports.postId, communityPostReports.reporterUserId],
         set: { reason: input.reason, createdAt: new Date() },
       });
+  }
+
+  /**
+   * 커뮤니티 프로필을 조회한다.
+   *
+   * @param userId 사용자 ID
+   * @returns 커뮤니티 프로필 또는 undefined
+   */
+  findProfile(userId: string) {
+    return this.db.query.communityProfiles.findFirst({ where: eq(communityProfiles.userId, userId) });
+  }
+
+  /**
+   * 커뮤니티 프로필 이름을 생성하거나 갱신한다.
+   *
+   * @param input 사용자 ID와 커뮤니티 이름
+   * @returns 커뮤니티 프로필
+   */
+  async upsertProfile(input: { userId: string; name: string }) {
+    const [profile] = await this.db
+      .insert(communityProfiles)
+      .values(input)
+      .onConflictDoUpdate({
+        target: communityProfiles.userId,
+        set: { name: input.name, updatedAt: new Date() },
+      })
+      .returning();
+
+    return profile;
   }
 }

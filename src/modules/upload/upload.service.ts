@@ -34,6 +34,12 @@ export class UploadService {
     };
   }
 
+  /**
+   * R2 업로드용 presigned PUT URL을 생성한다.
+   *
+   * @param input 오브젝트 키와 content type
+   * @returns presigned PUT URL
+   */
   private async createPresignedPutUrl(input: { objectKey: string; contentType: string }): Promise<string> {
     const accountId = this.configService.get<string>("R2_ACCOUNT_ID");
     const accessKeyId = this.configService.get<string>("R2_ACCESS_KEY_ID");

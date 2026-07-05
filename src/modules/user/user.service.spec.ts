@@ -5,13 +5,25 @@ import { UserRepository } from "./user.repository";
 import { UserService } from "./user.service";
 
 describe("UserService", () => {
+  const userId = "8df07796-671f-48d5-949b-409126504801";
+
+  it("defaults current subscription to free", async () => {
+    const repository = {
+      findCurrentSubscription: jest.fn<() => Promise<undefined>>().mockResolvedValue(undefined),
+    } as unknown as UserRepository;
+    const service = new UserService(repository);
+
+    await expect(service.currentSubscription(userId)).resolves.toEqual({ planId: "free" });
+  });
+
   it("rejects profile updates with a phoneVerificationToken for another phone", async () => {
     const user: User = {
-      userId: "8df07796-671f-48d5-949b-409126504801",
+      userId,
       email: "user@example.com",
       phone: "+821011111111",
       password: "hash",
       userName: "user",
+      gender: "female",
       intro: "",
       createdAt: new Date(),
       updatedAt: new Date(),

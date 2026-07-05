@@ -1,19 +1,36 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, count, desc, eq, gt, isNull } from "drizzle-orm";
+import { and, count, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
 import { Database, DRIZZLE } from "src/modules/database/database.module";
-import { messageReports, messages, rooms, userBlocks } from "src/modules/database/schema";
+import { matches, messageReports, messages, rooms, userBlocks, users } from "src/modules/database/schema";
 
 @Injectable()
 export class ChatRepository {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
 
   /**
-   * 채팅방 목록과 각 방의 마지막 메시지를 조회한다.
+   * 매칭된 채팅방 목록과 각 방의 마지막 메시지를 조회한다.
    *
+   * @param userId 사용자 ID
    * @returns 채팅방 목록
    */
-  async rooms() {
-    const rows = await this.db.select().from(rooms).orderBy(desc(rooms.updatedAt));
+  async rooms(userId: string) {
+    const rows = await this.db
+      .select({
+        id: rooms.id,
+        name: users.userName,
+        updatedAt: rooms.updatedAt,
+      })
+      .from(matches)
+      .innerJoin(rooms, eq(rooms.id, matches.roomId))
+      .innerJoin(
+        users,
+        eq(
+          users.userId,
+          sql`case when ${matches.userLowId} = ${userId} then ${matches.userHighId} else ${matches.userLowId} end`,
+        ),
+      )
+      .where(or(eq(matches.userLowId, userId), eq(matches.userHighId, userId)))
+      .orderBy(desc(rooms.updatedAt));
 
     return Promise.all(
       rows.map(async (room) => {
@@ -23,7 +40,7 @@ export class ChatRepository {
           orderBy: desc(messages.createdAt),
         });
 
-        return { id: room.id, name: room.name, lastMessage: lastMessage?.text ?? null };
+        return { id: room.id, name: room.name, lastMessage: lastMessage?.text ?? null, updatedAt: room.updatedAt };
       }),
     );
   }

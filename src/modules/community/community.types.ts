@@ -6,7 +6,7 @@ export class CommunityPostPayload {
   id!: string;
 
   @Field()
-  anonymousName!: string;
+  authorName!: string;
 
   @Field()
   title!: string;
@@ -30,7 +30,7 @@ export class CommunityCommentPayload {
   postId!: string;
 
   @Field()
-  anonymousName!: string;
+  authorName!: string;
 
   @Field()
   body!: string;
@@ -64,4 +64,16 @@ export class ReportCommunityPostInput {
 
   @Field()
   reason!: string;
+}
+
+@ObjectType()
+export class CommunityProfilePayload {
+  @Field()
+  name!: string;
+}
+
+@InputType()
+export class UpdateCommunityProfileInput {
+  @Field()
+  name!: string;
 }

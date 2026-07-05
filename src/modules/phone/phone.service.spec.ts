@@ -204,7 +204,7 @@ describe("PhoneService", () => {
 
     await expect(
       service.completePhoneSignup(
-        { email: "user@example.com", password: "password", phoneVerificationToken: "signup-token" },
+        { email: "user@example.com", password: "password", gender: "female", phoneVerificationToken: "signup-token" },
         "device",
       ),
     ).resolves.toEqual({ accessToken: "access", refreshToken: "refresh" });

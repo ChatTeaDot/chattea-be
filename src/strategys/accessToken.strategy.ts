@@ -15,6 +15,7 @@ export class JwtAccessTokenStrategy extends PassportStrategy(Strategy, "access_t
   constructor(private readonly configService: ConfigService) {
     super({
       jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
         (request: Request) => {
           return request.cookies?.access_token ?? null;
         },

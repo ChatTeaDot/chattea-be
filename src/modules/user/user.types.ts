@@ -38,5 +38,14 @@ export class UserPayload {
   userName!: string;
 
   @Field()
+  gender!: string;
+
+  @Field()
   intro!: string;
+}
+
+@ObjectType()
+export class CurrentSubscriptionPayload {
+  @Field()
+  planId!: string;
 }

@@ -1,7 +1,9 @@
 import { Injectable } from "@nestjs/common";
 import { CommunityRepository } from "./community.repository";
-import { CommunityCommentPayload, CommunityPostPayload } from "./community.types";
+import { CommunityCommentPayload, CommunityPostPayload, CommunityProfilePayload } from "./community.types";
 
+const DEFAULT_COMMUNITY_NAME = "익명";
+const COMMUNITY_NAME_MAX_LENGTH = 20;
 const TITLE_MAX_LENGTH = 80;
 const BODY_MAX_LENGTH = 1000;
 const COMMENT_MAX_LENGTH = 500;
@@ -41,6 +43,32 @@ export class CommunityService {
   }
 
   /**
+   * 사용자의 커뮤니티 프로필을 조회한다.
+   *
+   * @param userId 사용자 ID
+   * @returns 커뮤니티 프로필
+   */
+  async profile(userId: string): Promise<CommunityProfilePayload> {
+    validateUuid(userId, "USER_ID_INVALID");
+    return { name: (await this.communityRepository.findProfile(userId))?.name ?? DEFAULT_COMMUNITY_NAME };
+  }
+
+  /**
+   * 사용자의 커뮤니티 프로필 이름을 변경한다.
+   *
+   * @param userId 사용자 ID
+   * @param name 커뮤니티 이름
+   * @returns 변경된 커뮤니티 프로필
+   */
+  async updateProfile(userId: string, name: string): Promise<CommunityProfilePayload> {
+    validateUuid(userId, "USER_ID_INVALID");
+    return this.communityRepository.upsertProfile({
+      userId,
+      name: validateText(name, COMMUNITY_NAME_MAX_LENGTH, "COMMUNITY_PROFILE_NAME"),
+    });
+  }
+
+  /**
    * 커뮤니티 게시글을 생성한다.
    *
    * @param userId 작성자 ID
@@ -49,13 +77,14 @@ export class CommunityService {
    */
   async createPost(userId: string, input: { title: string; body: string }): Promise<CommunityPostPayload> {
     validateUuid(userId, "USER_ID_INVALID");
+    const authorName = await this.authorName(userId);
     const post = await this.communityRepository.createPost({
       userId,
       title: validateText(input.title, TITLE_MAX_LENGTH, "COMMUNITY_TITLE"),
       body: validateText(input.body, BODY_MAX_LENGTH, "COMMUNITY_BODY"),
     });
 
-    return rowToPost({ ...post, id: post.id, commentCount: "0" });
+    return rowToPost({ ...post, authorName, id: post.id, commentCount: "0" });
   }
 
   /**
@@ -70,12 +99,13 @@ export class CommunityService {
     validateUuid(userId, "USER_ID_INVALID");
     validateUuid(postId, "COMMUNITY_POST_ID_INVALID");
     if (!(await this.communityRepository.findPost(postId))) throw new Error("COMMUNITY_POST_NOT_FOUND");
+    const authorName = await this.authorName(userId);
     const comment = await this.communityRepository.createComment({
       userId,
       postId,
       body: validateText(body, COMMENT_MAX_LENGTH, "COMMUNITY_COMMENT"),
     });
-    return rowToComment(comment);
+    return rowToComment({ ...comment, authorName });
   }
 
   /**
@@ -96,11 +126,21 @@ export class CommunityService {
     });
     return true;
   }
+
+  /**
+   * 사용자 커뮤니티 이름을 조회한다.
+   *
+   * @param userId 사용자 ID
+   * @returns 커뮤니티 이름
+   */
+  private async authorName(userId: string): Promise<string> {
+    return (await this.communityRepository.findProfile(userId))?.name ?? DEFAULT_COMMUNITY_NAME;
+  }
 }
 
 type PostRow = {
   id: string;
-  anonymousName: string;
+  authorName: string;
   title: string;
   body: string;
   commentCount: number | string;
@@ -110,7 +150,7 @@ type PostRow = {
 type CommentRow = {
   id: string;
   postId: string;
-  anonymousName: string;
+  authorName: string;
   body: string;
   createdAt: Date;
 };
@@ -130,7 +170,7 @@ const validateUuid = (input: string, error: string): void => {
 
 const rowToPost = (row: PostRow): CommunityPostPayload => ({
   id: row.id,
-  anonymousName: row.anonymousName,
+  authorName: row.authorName,
   title: row.title,
   body: row.body,
   commentCount: Number(row.commentCount),
@@ -140,7 +180,7 @@ const rowToPost = (row: PostRow): CommunityPostPayload => ({
 const rowToComment = (row: CommentRow): CommunityCommentPayload => ({
   id: row.id,
   postId: row.postId,
-  anonymousName: row.anonymousName,
+  authorName: row.authorName,
   body: row.body,
   createdAt: row.createdAt.toISOString(),
 });

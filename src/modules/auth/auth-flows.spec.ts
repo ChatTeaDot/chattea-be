@@ -24,6 +24,7 @@ describe("auth flows (e2e)", () => {
     phone,
     password: "hash",
     userName: "user",
+    gender: "female",
     intro: "",
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -85,7 +86,10 @@ describe("auth flows (e2e)", () => {
       phoneVerificationToken: "access",
     });
     await expect(
-      phone.completePhoneSignup({ email: user.email, password: "password", phoneVerificationToken: "access" }, "device"),
+      phone.completePhoneSignup(
+        { email: user.email, password: "password", gender: "female", phoneVerificationToken: "access" },
+        "device",
+      ),
     ).resolves.toEqual({ accessToken: "access", refreshToken: "refresh" });
   });
 
@@ -164,7 +168,7 @@ describe("auth flows (e2e)", () => {
     const auth = new AuthService(repository, services.jwtService, services.configService, {} as UserService);
 
     await expect(
-      auth.completeKakaoPhoneSignup({ phoneVerificationToken: "signup-token", kakaoPhoneVerificationToken: "kakao-token" }, "device"),
+      auth.completeKakaoPhoneSignup({ phoneVerificationToken: "signup-token", kakaoPhoneVerificationToken: "kakao-token", gender: "female" }, "device"),
     ).resolves.toEqual({ accessToken: "access", refreshToken: "refresh" });
   });
 });

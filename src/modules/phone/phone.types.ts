@@ -58,6 +58,9 @@ export class CompletePhoneSignupInput {
 
   @Field({ nullable: true })
   userName?: string;
+
+  @Field({ nullable: true })
+  gender?: string;
 }
 
 @InputType()
@@ -70,6 +73,9 @@ export class CompleteKakaoPhoneSignupInput {
 
   @Field({ nullable: true })
   userName?: string;
+
+  @Field({ nullable: true })
+  gender?: string;
 }
 
 @InputType()

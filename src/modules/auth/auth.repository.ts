@@ -9,6 +9,7 @@ import {
   phoneVerificationTokens,
   users,
   type AuthIdentity,
+  type Gender,
   type KakaoPhoneVerificationToken,
   type RefreshToken,
   type PhoneVerificationToken,
@@ -38,6 +39,7 @@ export class AuthRepository {
         phone: input.phone,
         password: input.password,
         userName: input.userName,
+        gender: input.gender,
       })
       .returning();
 
@@ -70,6 +72,7 @@ export class AuthRepository {
           phone: phoneVerificationToken.phoneE164,
           password: input.password,
           userName: input.userName,
+          gender: input.gender,
         })
         .returning();
 
@@ -297,6 +300,7 @@ export class AuthRepository {
     email: string;
     password: string;
     phone: string;
+    gender: Gender;
   }): Promise<User> {
     return this.db.transaction(async (tx) => {
       const [user] = await tx
@@ -307,6 +311,7 @@ export class AuthRepository {
           password: input.password,
           phone: input.phone,
           userName: input.email.split("@")[0] || "kakao",
+          gender: input.gender,
         })
         .returning();
 
@@ -327,6 +332,7 @@ export class AuthRepository {
       email: string;
       password: string;
       phone: string;
+      gender: Gender;
     },
     tokens: { phoneVerificationToken: string; kakaoPhoneVerificationToken: string },
   ): Promise<User> {
@@ -366,6 +372,7 @@ export class AuthRepository {
           password: input.password,
           phone: input.phone,
           userName: input.email.split("@")[0] || "kakao",
+          gender: input.gender,
         })
         .returning();
 

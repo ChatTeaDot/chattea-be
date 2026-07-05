@@ -4,6 +4,7 @@ import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
 import { ChatService } from "./chat.service";
 import {
+  AiSummaryPreviewPayload,
   BlockUserInput,
   ChatMessagePayload,
   ChatMessagesInput,
@@ -13,6 +14,7 @@ import {
   ReportMessageInput,
   SendChatMessageInput,
   SetTypingInput,
+  UnreadMessageSummaryInput,
 } from "./chat.types";
 
 @Resolver()
@@ -27,12 +29,13 @@ export class ChatResolver {
   /**
    * 현재 사용자의 채팅방 목록을 조회한다.
    *
+   * @param req 인증 요청 객체
    * @returns 채팅방 목록
    */
   @UseGuards(JwtAccessTokenGuard)
   @Query(() => [ChatRoomPayload])
-  chatRooms() {
-    return this.chatService.rooms();
+  chatRooms(@Context("req") req: AuthRequest) {
+    return this.chatService.rooms(req.user.userId);
   }
 
   /**
@@ -131,5 +134,11 @@ export class ChatResolver {
   @Mutation(() => Boolean)
   reportChatMessage(@Context("req") req: AuthRequest, @Args("input") input: ReportMessageInput) {
     return this.chatService.reportMessage(req.user.userId, input.messageId, input.reason);
+  }
+
+  @UseGuards(JwtAccessTokenGuard)
+  @Query(() => AiSummaryPreviewPayload)
+  unreadMessageSummary(@Args("input") input: UnreadMessageSummaryInput) {
+    return this.chatService.unreadMessageSummary(input);
   }
 }
