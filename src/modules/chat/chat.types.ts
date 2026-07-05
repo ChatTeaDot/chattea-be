@@ -8,8 +8,8 @@ export class ChatRoomPayload {
   @Field()
   name!: string;
 
-  @Field()
-  lastMessage!: string;
+  @Field(() => String, { nullable: true })
+  lastMessage!: string | null;
 }
 
 @ObjectType()
@@ -91,4 +91,31 @@ export class ReportMessageInput {
 
   @Field()
   reason!: string;
+}
+
+@InputType()
+export class UnreadMessageSummaryInput {
+  @Field()
+  planId!: string;
+
+  @Field(() => [String])
+  unreadTexts!: string[];
+
+  @Field()
+  enabled!: boolean;
+}
+
+@ObjectType()
+export class AiSummaryPreviewPayload {
+  @Field()
+  available!: boolean;
+
+  @Field({ nullable: true })
+  reason?: string;
+
+  @Field()
+  sourceText!: string;
+
+  @Field({ nullable: true })
+  summary?: string;
 }

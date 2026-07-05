@@ -9,8 +9,6 @@ import { UserModule } from "./user/user.module";
 import { ChatModule } from "./chat/chat.module";
 import { CommunityModule } from "./community/community.module";
 import { MatchingModule } from "./matching/matching.module";
-import { ScoreModule } from "./score/score.module";
-import { SubscriptionModule } from "./subscription/subscription.module";
 import { UploadModule } from "./upload/upload.module";
 
 @Module({
@@ -28,11 +26,9 @@ import { UploadModule } from "./upload/upload.module";
     AuthModule,
     PhoneModule,
     UserModule,
-    SubscriptionModule,
     ChatModule,
     CommunityModule,
     MatchingModule,
-    ScoreModule,
     UploadModule,
   ],
 })

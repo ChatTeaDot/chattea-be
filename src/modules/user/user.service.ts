@@ -3,7 +3,7 @@ import * as bcrypt from "bcrypt";
 import { CustomNotFoundException, CustomUnauthorizedException } from "src/common/errors/custom-exceptions";
 import { UserErrorMessage } from "./user.error";
 import { UserRepository } from "./user.repository";
-import { UpdateEmailRepositoryInput, UpdatePasswordRepositoryInput } from "./user.types";
+import { CurrentSubscriptionPayload, UpdateEmailRepositoryInput, UpdatePasswordRepositoryInput } from "./user.types";
 
 @Injectable()
 export class UserService {
@@ -25,6 +25,17 @@ export class UserService {
     const user = await this.userRepository.findUser(userId);
     if (!user) throw new CustomNotFoundException(UserErrorMessage.InvalidUserId);
     return user;
+  }
+
+  /**
+   * 사용자의 현재 활성 구독 플랜을 조회한다.
+   *
+   * @param userId 사용자 ID
+   * @returns 현재 구독 플랜
+   */
+  async currentSubscription(userId: string): Promise<CurrentSubscriptionPayload> {
+    validateUuid(userId);
+    return { planId: (await this.userRepository.findCurrentSubscription(userId))?.planId ?? "free" };
   }
 
   /**
@@ -74,3 +85,9 @@ export class UserService {
     }
   }
 }
+
+const validateUuid = (input: string): void => {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input)) {
+    throw new Error("USER_ID_INVALID");
+  }
+};

@@ -15,6 +15,7 @@ describe("AuthService", () => {
     phone: "+821011111111",
     password: "hash",
     userName: "user",
+    gender: "female",
     intro: "",
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -44,7 +45,7 @@ describe("AuthService", () => {
     const service = new AuthService(repository, services.jwtService, services.configService, {} as UserService);
 
     await expect(
-      service.signup({ email: user.email, password: "password", userName: "", phoneVerificationToken: "signup-token" }, "device"),
+      service.signup({ email: user.email, password: "password", userName: "", gender: "female", phoneVerificationToken: "signup-token" }, "device"),
     ).resolves.toEqual({ accessToken: "access", refreshToken: "refresh" });
   });
 
@@ -57,7 +58,7 @@ describe("AuthService", () => {
     const service = new AuthService(repository, {} as JwtService, {} as ConfigService, {} as UserService);
 
     await expect(
-      service.signup({ email: user.email, password: "password", userName: "", phoneVerificationToken: "signup-token" }, "device"),
+      service.signup({ email: user.email, password: "password", userName: "", gender: "female", phoneVerificationToken: "signup-token" }, "device"),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -68,6 +69,7 @@ describe("AuthService", () => {
       phone: "+821011111111",
       password: await bcrypt.hash("password", 10),
       userName: "user",
+      gender: "female",
       intro: "",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -108,6 +110,7 @@ describe("AuthService", () => {
       phone: "+821011111111",
       password: "hash",
       userName: "user",
+      gender: "female",
       intro: "",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -147,6 +150,7 @@ describe("AuthService", () => {
         {
           phoneVerificationToken: phoneVerificationToken.tokenHash,
           kakaoPhoneVerificationToken: kakaoToken.tokenHash,
+          gender: "female",
         },
         "device",
       ),
@@ -187,6 +191,7 @@ describe("AuthService", () => {
         {
           phoneVerificationToken: phoneVerificationToken.tokenHash,
           kakaoPhoneVerificationToken: kakaoToken.tokenHash,
+          gender: "female",
         },
         "device",
       ),
@@ -200,6 +205,7 @@ describe("AuthService", () => {
       phone: "+821011111111",
       password: "hash",
       userName: "user",
+      gender: "female",
       intro: "",
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -277,7 +283,7 @@ describe("AuthService", () => {
     const service = new AuthService(repository, services.jwtService, services.configService, {} as UserService);
 
     await expect(
-      service.completeKakaoPhoneSignup({ phoneVerificationToken: "signup-token", kakaoPhoneVerificationToken: "kakao-token" }, "device"),
+      service.completeKakaoPhoneSignup({ phoneVerificationToken: "signup-token", kakaoPhoneVerificationToken: "kakao-token", gender: "female" }, "device"),
     ).resolves.toEqual({ accessToken: "access", refreshToken: "refresh" });
   });
 });

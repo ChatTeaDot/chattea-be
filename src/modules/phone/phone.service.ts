@@ -10,6 +10,7 @@ import {
   CustomUnauthorizedException,
 } from "src/common/errors/custom-exceptions";
 import { AuthService } from "src/modules/auth/auth.service";
+import { isGender } from "src/modules/database/schema";
 import { PhoneErrorMessage } from "./phone.error";
 import { PhoneRepository } from "./phone.repository";
 import {
@@ -135,23 +136,45 @@ export class PhoneService {
     return { existingUser: false, phoneVerificationToken };
   }
 
+  /**
+   * 전화번호 인증 토큰으로 일반 가입을 완료한다.
+   *
+   * @param input 가입 완료 입력값
+   * @param deviceId 기기 ID
+   * @returns 인증 토큰
+   */
   async completePhoneSignup(input: CompletePhoneSignupInput, deviceId: string) {
+    const gender = input.gender?.trim() ?? "";
+    if (!isGender(gender)) throw new CustomBadRequestException(PhoneErrorMessage.InvalidGender);
+
     return this.authService.signup(
       {
         email: input.email,
         password: input.password,
         userName: input.userName?.trim() || input.email.split("@")[0] || "user",
+        gender,
         phoneVerificationToken: input.phoneVerificationToken,
       },
       deviceId,
     );
   }
 
+  /**
+   * 카카오 전화번호 가입을 완료한다.
+   *
+   * @param input 카카오 가입 완료 입력값
+   * @param deviceId 기기 ID
+   * @returns 인증 토큰
+   */
   async completeKakaoPhoneSignup(input: CompleteKakaoPhoneSignupInput, deviceId: string) {
+    const gender = input.gender?.trim() ?? "";
+    if (!isGender(gender)) throw new CustomBadRequestException(PhoneErrorMessage.InvalidGender);
+
     return this.authService.completeKakaoPhoneSignup(
       {
         phoneVerificationToken: input.phoneVerificationToken,
         kakaoPhoneVerificationToken: input.kakaoPhoneVerificationToken,
+        gender,
       },
       deviceId,
     );
@@ -210,6 +233,12 @@ export class PhoneService {
     return true;
   }
 
+  /**
+   * 한국 휴대폰 번호를 E.164 형식으로 정규화한다.
+   *
+   * @param phone 전화번호
+   * @returns E.164 전화번호
+   */
   private normalizeKoreanPhone(phone: string) {
     const digits = phone.replace(/\D/g, "");
     if (digits.startsWith("010") && digits.length === 11) return `+82${digits.slice(1)}`;
@@ -217,14 +246,34 @@ export class PhoneService {
     throw new CustomBadRequestException(PhoneErrorMessage.KoreanPhoneOnly);
   }
 
+  /**
+   * 전화번호 인증 코드에 서버 pepper를 섞는다.
+   *
+   * @param phoneE164 E.164 전화번호
+   * @param code 인증 코드
+   * @returns peppered 인증 코드
+   */
   private pepperedCode(phoneE164: string, code: string) {
     return `${phoneE164}:${code}:${this.configService.getOrThrow<string>("PHONE_CODE_PEPPER")}`;
   }
 
+  /**
+   * SHA-256 해시를 생성한다.
+   *
+   * @param value 해시할 값
+   * @returns hex 해시
+   */
   private sha256(value: string) {
     return createHash("sha256").update(value).digest("hex");
   }
 
+  /**
+   * 사용할 수 있는 최신 전화번호 인증 요청을 조회한다.
+   *
+   * @param phoneE164 E.164 전화번호
+   * @param purpose 인증 목적
+   * @returns 전화번호 인증 요청
+   */
   private async getUsableVerification(phoneE164: string, purpose?: string) {
     const verification = await this.phoneRepository.latestVerification(phoneE164);
     if (!verification || verification.verifiedAt)
@@ -239,6 +288,13 @@ export class PhoneService {
     return verification;
   }
 
+  /**
+   * 가입용 전화번호 인증 토큰을 생성하고 저장한다.
+   *
+   * @param phoneE164 E.164 전화번호
+   * @param verificationId 인증 요청 ID
+   * @returns 전화번호 인증 토큰
+   */
   private async createPhoneVerificationToken(phoneE164: string, verificationId: string) {
     const token = await this.jwtService.signAsync(
       { phoneE164, verificationId, nonce: randomUUID() },

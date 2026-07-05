@@ -6,9 +6,11 @@ import { CommunityService } from "./community.service";
 import {
   CommunityCommentPayload,
   CommunityPostPayload,
+  CommunityProfilePayload,
   CreateCommunityCommentInput,
   CreateCommunityPostInput,
   ReportCommunityPostInput,
+  UpdateCommunityProfileInput,
 } from "./community.types";
 
 @Resolver()
@@ -41,6 +43,18 @@ export class CommunityResolver {
   @Query(() => [CommunityCommentPayload])
   communityComments(@Args("postId") postId: string) {
     return this.communityService.comments(postId);
+  }
+
+  /**
+   * 현재 사용자의 커뮤니티 프로필을 조회한다.
+   *
+   * @param req 인증 요청 객체
+   * @returns 커뮤니티 프로필
+   */
+  @UseGuards(JwtAccessTokenGuard)
+  @Query(() => CommunityProfilePayload)
+  communityProfile(@Context("req") req: AuthRequest) {
+    return this.communityService.profile(req.user.userId);
   }
 
   /**
@@ -80,5 +94,18 @@ export class CommunityResolver {
   @Mutation(() => Boolean)
   reportCommunityPost(@Context("req") req: AuthRequest, @Args("input") input: ReportCommunityPostInput) {
     return this.communityService.reportPost(req.user.userId, input.postId, input.reason);
+  }
+
+  /**
+   * 현재 사용자의 커뮤니티 프로필 이름을 변경한다.
+   *
+   * @param req 인증 요청 객체
+   * @param input 커뮤니티 프로필 입력값
+   * @returns 변경된 커뮤니티 프로필
+   */
+  @UseGuards(JwtAccessTokenGuard)
+  @Mutation(() => CommunityProfilePayload)
+  updateCommunityProfile(@Context("req") req: AuthRequest, @Args("input") input: UpdateCommunityProfileInput) {
+    return this.communityService.updateProfile(req.user.userId, input.name);
   }
 }

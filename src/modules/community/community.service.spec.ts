@@ -9,12 +9,13 @@ describe("CommunityService", () => {
   it("trims post title and body before creating a post", async () => {
     const post = {
       id: postId,
-      anonymousName: "익명",
+      authorName: "커뮤닉",
       title: "제목",
       body: "본문",
       createdAt: new Date("2026-01-01T00:00:00.000Z"),
     };
     const repository = {
+      findProfile: jest.fn<() => Promise<{ name: string }>>().mockResolvedValue({ name: "커뮤닉" }),
       createPost: jest.fn<() => Promise<typeof post>>().mockResolvedValue(post),
     } as unknown as CommunityRepository;
     const service = new CommunityService(repository);

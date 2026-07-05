@@ -1,11 +1,16 @@
 import { integer, pgTable, primaryKey, text, timestamp, unique, uuid, varchar } from "drizzle-orm/pg-core";
 
+export const genders = ["male", "female"] as const;
+export type Gender = (typeof genders)[number];
+export const isGender = (value: string): value is Gender => genders.includes(value as Gender);
+
 export const users = pgTable("users", {
   userId: uuid("userId").primaryKey(),
   email: varchar("email", { length: 255 }).notNull().unique(),
   phone: varchar("phone", { length: 20 }).unique(),
   password: text("password").notNull(),
   userName: varchar("userName", { length: 40 }).notNull().default(""),
+  gender: varchar("gender", { length: 20, enum: genders }).notNull(),
   intro: text("intro").notNull().default(""),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
@@ -202,10 +207,18 @@ export const communityPosts = pgTable("community_posts", {
   authorUserId: uuid("authorUserId")
     .notNull()
     .references(() => users.userId),
-  anonymousName: text("anonymousName").notNull(),
   title: text("title").notNull(),
   body: text("body").notNull(),
   deletedAt: timestamp("deletedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+
+export const communityProfiles = pgTable("community_profiles", {
+  userId: uuid("userId")
+    .primaryKey()
+    .references(() => users.userId),
+  name: varchar("name", { length: 20 }).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
@@ -218,7 +231,6 @@ export const communityComments = pgTable("community_comments", {
   authorUserId: uuid("authorUserId")
     .notNull()
     .references(() => users.userId),
-  anonymousName: text("anonymousName").notNull(),
   body: text("body").notNull(),
   deletedAt: timestamp("deletedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -268,5 +280,6 @@ export type Message = typeof messages.$inferSelect;
 export type UserLike = typeof userLikes.$inferSelect;
 export type UserSubscription = typeof userSubscriptions.$inferSelect;
 export type CommunityPost = typeof communityPosts.$inferSelect;
+export type CommunityProfile = typeof communityProfiles.$inferSelect;
 export type CommunityComment = typeof communityComments.$inferSelect;
 export type Score = typeof scores.$inferSelect;

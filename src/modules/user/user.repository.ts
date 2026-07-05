@@ -1,8 +1,15 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or } from "drizzle-orm";
 import { hashToken } from "src/common/security/token-hash";
 import { Database, DRIZZLE } from "src/modules/database/database.module";
-import { phoneVerificationTokens, users, type PhoneVerificationToken, type User } from "src/modules/database/schema";
+import {
+  phoneVerificationTokens,
+  userSubscriptions,
+  users,
+  type PhoneVerificationToken,
+  type User,
+  type UserSubscription,
+} from "src/modules/database/schema";
 import { UpdateEmailRepositoryInput, UpdatePasswordRepositoryInput } from "./user.types";
 
 @Injectable()
@@ -17,6 +24,17 @@ export class UserRepository {
    */
   findUser(userId: string): Promise<User | undefined> {
     return this.db.query.users.findFirst({ where: eq(users.userId, userId) });
+  }
+
+  findCurrentSubscription(userId: string): Promise<UserSubscription | undefined> {
+    return this.db.query.userSubscriptions.findFirst({
+      where: and(
+        eq(userSubscriptions.userId, userId),
+        eq(userSubscriptions.status, "active"),
+        or(isNull(userSubscriptions.currentPeriodEndsAt), gt(userSubscriptions.currentPeriodEndsAt, new Date())),
+      ),
+      orderBy: desc(userSubscriptions.createdAt),
+    });
   }
 
   findPhoneVerificationToken(token: string): Promise<PhoneVerificationToken | undefined> {

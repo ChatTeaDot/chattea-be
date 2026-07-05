@@ -1,5 +1,6 @@
 import { Field, InputType, ObjectType } from "@nestjs/graphql";
 import { Request } from "express";
+import { Gender } from "src/modules/database/schema";
 
 export type JwtPayload = {
   userId: string;
@@ -44,6 +45,9 @@ export class SignupAuthInput {
 
   @Field()
   userName!: string;
+
+  @Field()
+  gender!: Gender;
 
   @Field()
   phoneVerificationToken!: string;

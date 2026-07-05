@@ -3,7 +3,7 @@ import { UseGuards } from "@nestjs/common";
 import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
 import { UserService } from "./user.service";
-import { UpdateEmailInput, UpdatePasswordInput, UserPayload } from "./user.types";
+import { CurrentSubscriptionPayload, UpdateEmailInput, UpdatePasswordInput, UserPayload } from "./user.types";
 
 @Resolver()
 export class UserResolver {
@@ -24,7 +24,19 @@ export class UserResolver {
   @Query(() => UserPayload)
   async me(@Context("req") req: AuthRequest) {
     const user = await this.userService.findUser(req.user.userId);
-    return { email: user.email, phone: user.phone ?? undefined, userName: user.userName, intro: user.intro };
+    return {
+      email: user.email,
+      phone: user.phone ?? undefined,
+      userName: user.userName,
+      gender: user.gender,
+      intro: user.intro,
+    };
+  }
+
+  @UseGuards(JwtAccessTokenGuard)
+  @Query(() => CurrentSubscriptionPayload)
+  currentSubscription(@Context("req") req: AuthRequest) {
+    return this.userService.currentSubscription(req.user.userId);
   }
 
   /**

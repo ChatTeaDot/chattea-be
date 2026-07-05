@@ -1,10 +1,13 @@
 import { Injectable } from "@nestjs/common";
 import { ChatRepository } from "./chat.repository";
-import { ChatMessagePayload, ChatRoomPayload } from "./chat.types";
+import { AiSummaryPreviewPayload, ChatMessagePayload, ChatRoomPayload } from "./chat.types";
 
 const FIRST_MESSAGE_MAX_LENGTH = 30;
 const MESSAGE_MAX_LENGTH = 90;
 const REPORT_REASON_MAX_LENGTH = 120;
+const SUMMARY_MIN_LENGTH = 30;
+const SUMMARY_MAX_SOURCE_LENGTH = 180;
+const SUMMARY_PLAN_IDS = new Set(["gold", "black"]);
 
 @Injectable()
 export class ChatService {
@@ -20,13 +23,14 @@ export class ChatService {
    *
    * @returns 채팅방 목록
    */
-  async rooms(): Promise<ChatRoomPayload[]> {
-    const result = await this.chatRepository.rooms();
+  async rooms(userId: string): Promise<ChatRoomPayload[]> {
+    this.validateUuid(userId, "USER_ID_INVALID");
+    const result = await this.chatRepository.rooms(userId);
 
     return result.map((room) => ({
       id: room.id,
       name: room.name,
-      lastMessage: room.lastMessage ?? "",
+      lastMessage: room.lastMessage,
     }));
   }
 
@@ -144,6 +148,39 @@ export class ChatService {
     return true;
   }
 
+  /**
+   * 안읽은 메시지 요약 미리보기를 생성한다.
+   *
+   * @param input 플랜 ID, 안읽은 메시지 목록, 활성화 여부
+   * @returns AI 요약 미리보기
+   */
+  unreadMessageSummary(input: { planId: string; unreadTexts: string[]; enabled: boolean }): AiSummaryPreviewPayload {
+    if (!input.enabled) return unavailable("SUMMARY_DISABLED");
+    if (!SUMMARY_PLAN_IDS.has(input.planId.toLowerCase())) return unavailable("SUMMARY_PLAN_REQUIRED");
+
+    const sourceText = input.unreadTexts
+      .map((text) => text.trim())
+      .filter(Boolean)
+      .join(" ")
+      .slice(-SUMMARY_MAX_SOURCE_LENGTH);
+
+    if (sourceText.length < SUMMARY_MIN_LENGTH) {
+      return { ...unavailable("SUMMARY_TEXT_TOO_SHORT"), sourceText };
+    }
+
+    return {
+      available: true,
+      sourceText,
+      summary: `최근 안읽은 대화 요약: ${sourceText}`,
+    };
+  }
+
+  /**
+   * 메시지 본문을 검증하고 정규화한다.
+   *
+   * @param input 메시지 본문
+   * @returns 정규화된 메시지 본문
+   */
   private validateText(input: string): string {
     const text = input.trim();
     if (!text) throw new Error("MESSAGE_TEXT_REQUIRED");
@@ -151,6 +188,12 @@ export class ChatService {
     return text;
   }
 
+  /**
+   * UUID 형식을 검증한다.
+   *
+   * @param input 검증할 UUID
+   * @param error 실패 시 던질 에러 메시지
+   */
   private validateUuid(input: string, error: string): void {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input)) {
       throw new Error(error);
@@ -172,6 +215,12 @@ const validateReportReason = (input: string): string => {
   if (reason.length > REPORT_REASON_MAX_LENGTH) throw new Error("REPORT_REASON_TOO_LONG");
   return reason;
 };
+
+const unavailable = (reason: string): AiSummaryPreviewPayload => ({
+  available: false,
+  reason,
+  sourceText: "",
+});
 
 const rowToMessage = (row: MessageRow): ChatMessagePayload => ({
   id: row.id,
