@@ -9,6 +9,7 @@ import {
   CommunityProfilePayload,
   CreateCommunityCommentInput,
   CreateCommunityPostInput,
+  ReportCommunityCommentInput,
   ReportCommunityPostInput,
   UpdateCommunityProfileInput,
 } from "./community.types";
@@ -94,6 +95,12 @@ export class CommunityResolver {
   @Mutation(() => Boolean)
   reportCommunityPost(@Context("req") req: AuthRequest, @Args("input") input: ReportCommunityPostInput) {
     return this.communityService.reportPost(req.user.userId, input.postId, input.reason);
+  }
+
+  @UseGuards(JwtAccessTokenGuard)
+  @Mutation(() => Boolean)
+  reportCommunityComment(@Context("req") req: AuthRequest, @Args("input") input: ReportCommunityCommentInput) {
+    return this.communityService.reportComment(req.user.userId, input.commentId, input.reason);
   }
 
   /**

@@ -46,8 +46,8 @@ export class ChatResolver {
    */
   @UseGuards(JwtAccessTokenGuard)
   @Query(() => [ChatMessagePayload])
-  chatMessages(@Args("input") input: ChatMessagesInput) {
-    return this.chatService.messages(input);
+  chatMessages(@Context("req") req: AuthRequest, @Args("input") input: ChatMessagesInput) {
+    return this.chatService.messages({ ...input, userId: req.user.userId });
   }
 
   /**
@@ -58,8 +58,8 @@ export class ChatResolver {
    */
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => ChatMessagePayload)
-  sendChatMessage(@Args("input") input: SendChatMessageInput) {
-    return this.chatService.sendMessage(input);
+  sendChatMessage(@Context("req") req: AuthRequest, @Args("input") input: SendChatMessageInput) {
+    return this.chatService.sendMessage({ ...input, senderUserId: req.user.userId });
   }
 
   /**
@@ -70,8 +70,8 @@ export class ChatResolver {
    */
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => ChatMessagePayload)
-  editChatMessage(@Args("input") input: EditChatMessageInput) {
-    return this.chatService.editMessage(input);
+  editChatMessage(@Context("req") req: AuthRequest, @Args("input") input: EditChatMessageInput) {
+    return this.chatService.editMessage({ ...input, userId: req.user.userId });
   }
 
   /**
@@ -82,8 +82,8 @@ export class ChatResolver {
    */
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => Boolean)
-  deleteChatMessage(@Args("messageId") messageId: string) {
-    return this.chatService.deleteMessage(messageId);
+  deleteChatMessage(@Context("req") req: AuthRequest, @Args("messageId") messageId: string) {
+    return this.chatService.deleteMessage(messageId, req.user.userId);
   }
 
   /**
@@ -94,8 +94,8 @@ export class ChatResolver {
    */
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => Boolean)
-  markChatRoomRead(@Args("input") input: MarkRoomReadInput) {
-    return this.chatService.markRoomRead(input.roomId);
+  markChatRoomRead(@Context("req") req: AuthRequest, @Args("input") input: MarkRoomReadInput) {
+    return this.chatService.markRoomRead(input.roomId, req.user.userId);
   }
 
   /**

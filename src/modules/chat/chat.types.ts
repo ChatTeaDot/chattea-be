@@ -1,4 +1,4 @@
-import { Field, InputType, ObjectType } from "@nestjs/graphql";
+import { Field, InputType, Int, ObjectType } from "@nestjs/graphql";
 
 @ObjectType()
 export class ChatRoomPayload {
@@ -10,6 +10,9 @@ export class ChatRoomPayload {
 
   @Field(() => String, { nullable: true })
   lastMessage!: string | null;
+
+  @Field(() => Int)
+  unreadCount!: number;
 }
 
 @ObjectType()
@@ -19,6 +22,9 @@ export class ChatMessagePayload {
 
   @Field()
   roomId!: string;
+
+  @Field({ nullable: true })
+  senderUserId?: string;
 
   @Field()
   text!: string;
