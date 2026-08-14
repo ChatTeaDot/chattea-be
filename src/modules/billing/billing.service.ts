@@ -5,11 +5,11 @@ import { NotificationService } from "src/modules/notification/notification.servi
 import { BillingRepository } from "./billing.repository";
 
 export const BILLING_PRODUCTS = [
-  { id: "chattea_basic_monthly", kind: "subscription", planId: "basic", name: "Basic", priceKrw: 4900 },
-  { id: "chattea_gold_monthly", kind: "subscription", planId: "gold", name: "Gold", priceKrw: 9900 },
-  { id: "chattea_black_monthly", kind: "subscription", planId: "black", name: "Black", priceKrw: 24900 },
-  { id: "chattea_boost_30m", kind: "boost", name: "30분 부스트", priceKrw: 1900 },
-  { id: "chattea_superlikes_5", kind: "superlike", name: "슈퍼라이크 5개", priceKrw: 2900 },
+  { id: "chattea_basic_monthly", kind: "subscription", planId: "basic", name: "Basic" },
+  { id: "chattea_gold_monthly", kind: "subscription", planId: "gold", name: "Gold" },
+  { id: "chattea_black_monthly", kind: "subscription", planId: "black", name: "Black" },
+  { id: "chattea_boost_30m", kind: "boost", name: "30분 부스트" },
+  { id: "chattea_superlikes_5", kind: "superlike", name: "슈퍼라이크 5개" },
 ] as const;
 
 type RevenueCatEvent = {

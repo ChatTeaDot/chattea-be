@@ -10,9 +10,6 @@ export class BillingProductPayload {
 
   @Field()
   name!: string;
-
-  @Field(() => Int)
-  priceKrw!: number;
 }
 
 @ObjectType()
