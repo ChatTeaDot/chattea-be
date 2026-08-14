@@ -101,18 +101,24 @@ export const roomMembers = pgTable(
   (table) => [primaryKey({ columns: [table.roomId, table.userId] })],
 );
 
-export const messages = pgTable("messages", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  roomId: uuid("roomId")
-    .notNull()
-    .references(() => rooms.id),
-  senderUserId: uuid("senderUserId").references(() => users.userId),
-  text: text("text").notNull(),
-  idempotencyKey: text("idempotencyKey").unique(),
-  deletedAt: timestamp("deletedAt"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
-});
+export const messages = pgTable(
+  "messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    roomId: uuid("roomId")
+      .notNull()
+      .references(() => rooms.id),
+    senderUserId: uuid("senderUserId").references(() => users.userId),
+    text: text("text").notNull(),
+    idempotencyKey: text("idempotencyKey"),
+    deletedAt: timestamp("deletedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("messages_room_sender_idempotency_unique").on(table.roomId, table.senderUserId, table.idempotencyKey),
+  ],
+);
 
 export const userBlocks = pgTable(
   "user_blocks",

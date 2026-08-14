@@ -23,11 +23,14 @@ export class CommunityRepository {
         createdAt: communityPosts.createdAt,
       })
       .from(communityPosts)
-      .leftJoin(communityComments, eq(communityComments.postId, communityPosts.id))
+      .leftJoin(
+        communityComments,
+        and(eq(communityComments.postId, communityPosts.id), isNull(communityComments.deletedAt)),
+      )
       .leftJoin(communityProfiles, eq(communityProfiles.userId, communityPosts.authorUserId))
       .where(isNull(communityPosts.deletedAt))
       .groupBy(communityPosts.id, communityProfiles.name)
-      .orderBy(desc(communityPosts.createdAt))
+      .orderBy(desc(communityPosts.createdAt), desc(communityPosts.id))
       .limit(50);
   }
 
@@ -49,7 +52,7 @@ export class CommunityRepository {
       .from(communityComments)
       .leftJoin(communityProfiles, eq(communityProfiles.userId, communityComments.authorUserId))
       .where(and(eq(communityComments.postId, postId), isNull(communityComments.deletedAt)))
-      .orderBy(asc(communityComments.createdAt))
+      .orderBy(asc(communityComments.createdAt), asc(communityComments.id))
       .limit(100);
   }
 
