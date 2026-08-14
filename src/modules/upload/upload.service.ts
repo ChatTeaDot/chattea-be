@@ -18,19 +18,23 @@ export class UploadService {
    * @param input 파일명과 content type
    * @returns 업로드 ID와 PUT URL
    */
-  async createUpload(input: { filename: string; contentType: string }): Promise<UploadPayload> {
+  async createUpload(input: { userId: string; filename: string; contentType: string }): Promise<UploadPayload> {
     const filename = input.filename.trim();
     const contentType = input.contentType.trim().toLowerCase();
     if (!filename) throw new Error("UPLOAD_FILENAME_REQUIRED");
-    if (!contentType.startsWith("image/")) throw new Error("UPLOAD_CONTENT_TYPE_UNSUPPORTED");
+    if (!PROFILE_IMAGE_CONTENT_TYPES.has(contentType)) throw new Error("UPLOAD_CONTENT_TYPE_UNSUPPORTED");
+    if (!isUuid(input.userId)) throw new Error("UPLOAD_USER_ID_INVALID");
 
     const id = randomUUID();
     const extension = filename.includes(".") ? filename.split(".").at(-1) : "bin";
-    const objectKey = `uploads/${id}.${extension}`;
+    const objectKey = `profiles/${input.userId}/${id}.${extension}`;
+    const publicBaseUrl = this.configService.get<string>("R2_PUBLIC_BASE_URL")?.replace(/\/+$/, "");
+    if (!publicBaseUrl) throw new Error("R2_CONFIG_REQUIRED");
 
     return {
       id,
       putUrl: await this.createPresignedPutUrl({ objectKey, contentType }),
+      publicUrl: `${publicBaseUrl}/${objectKey.split("/").map(encodeURIComponent).join("/")}`,
     };
   }
 
@@ -45,9 +49,6 @@ export class UploadService {
     const accessKeyId = this.configService.get<string>("R2_ACCESS_KEY_ID");
     const secretAccessKey = this.configService.get<string>("R2_SECRET_ACCESS_KEY");
     const bucket = this.configService.get<string>("R2_BUCKET");
-    if (!accountId && !accessKeyId && !secretAccessKey && !bucket) {
-      return `https://uploads.invalid/${encodeURIComponent(input.objectKey)}?contentType=${encodeURIComponent(input.contentType)}`;
-    }
     if (!accountId || !accessKeyId || !secretAccessKey || !bucket) throw new Error("R2_CONFIG_REQUIRED");
 
     const date = toAmzDate(new Date());
@@ -84,3 +85,6 @@ const toAmzDate = (date: Date): string => date.toISOString().replace(/[:-]|\.\d{
 const sha256Hex = (value: string): string => createHash("sha256").update(value).digest("hex");
 const hmac = (key: string | Buffer, value: string): Buffer => createHmac("sha256", key).update(value).digest();
 const hmacHex = (key: string | Buffer, value: string): string => createHmac("sha256", key).update(value).digest("hex");
+const PROFILE_IMAGE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
+const isUuid = (value: string): boolean =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);

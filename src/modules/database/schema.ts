@@ -1,8 +1,12 @@
-import { integer, pgTable, primaryKey, text, timestamp, unique, uuid, varchar } from "drizzle-orm/pg-core";
+import { date, integer, pgTable, primaryKey, text, timestamp, unique, uuid, varchar } from "drizzle-orm/pg-core";
 
 export const genders = ["male", "female"] as const;
 export type Gender = (typeof genders)[number];
 export const isGender = (value: string): value is Gender => genders.includes(value as Gender);
+export const interestedGenders = ["male", "female", "everyone"] as const;
+export type InterestedGender = (typeof interestedGenders)[number];
+export const isInterestedGender = (value: string): value is InterestedGender =>
+  interestedGenders.includes(value as InterestedGender);
 
 export const users = pgTable("users", {
   userId: uuid("userId").primaryKey(),
@@ -12,9 +16,30 @@ export const users = pgTable("users", {
   userName: varchar("userName", { length: 40 }).notNull().default(""),
   gender: varchar("gender", { length: 20, enum: genders }).notNull(),
   intro: text("intro").notNull().default(""),
+  birthDate: date("birthDate", { mode: "string" }),
+  region: varchar("region", { length: 20 }),
+  interestedGender: varchar("interestedGender", { length: 20, enum: interestedGenders }),
+  profileCompletedAt: timestamp("profileCompletedAt"),
+  hiddenAt: timestamp("hiddenAt"),
+  deletionScheduledAt: timestamp("deletionScheduledAt"),
+  deletedAt: timestamp("deletedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
+
+export const userProfilePhotos = pgTable(
+  "user_profile_photos",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("userId")
+      .notNull()
+      .references(() => users.userId, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    position: integer("position").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [unique("user_profile_photos_user_position_unique").on(table.userId, table.position)],
+);
 
 export const refreshTokens = pgTable(
   "refreshToken",
@@ -114,6 +139,21 @@ export const messages = pgTable("messages", {
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 
+export const readReceipts = pgTable(
+  "read_receipts",
+  {
+    roomId: uuid("roomId")
+      .notNull()
+      .references(() => rooms.id, { onDelete: "cascade" }),
+    userId: uuid("userId")
+      .notNull()
+      .references(() => users.userId, { onDelete: "cascade" }),
+    lastReadMessageId: uuid("lastReadMessageId").references(() => messages.id, { onDelete: "set null" }),
+    readAt: timestamp("readAt").defaultNow().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.roomId, table.userId] })],
+);
+
 export const userBlocks = pgTable(
   "user_blocks",
   {
@@ -178,10 +218,86 @@ export const userSubscriptions = pgTable("user_subscriptions", {
     .references(() => users.userId),
   planId: text("planId").notNull(),
   status: text("status").notNull(),
+  provider: text("provider"),
+  providerCustomerId: text("providerCustomerId"),
+  providerProductId: text("providerProductId"),
   currentPeriodStartsAt: timestamp("currentPeriodStartsAt"),
   currentPeriodEndsAt: timestamp("currentPeriodEndsAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+
+export const userConsumableBalances = pgTable("user_consumable_balances", {
+  userId: uuid("userId")
+    .primaryKey()
+    .references(() => users.userId, { onDelete: "cascade" }),
+  superLikeCredits: integer("superLikeCredits").notNull().default(0),
+  boostCredits: integer("boostCredits").notNull().default(0),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+
+export const userBoosts = pgTable("user_boosts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("userId")
+    .notNull()
+    .references(() => users.userId, { onDelete: "cascade" }),
+  source: text("source").notNull(),
+  startsAt: timestamp("startsAt").notNull(),
+  endsAt: timestamp("endsAt").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const matchActions = pgTable("match_actions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  actorUserId: uuid("actorUserId")
+    .notNull()
+    .references(() => users.userId, { onDelete: "cascade" }),
+  targetUserId: uuid("targetUserId")
+    .notNull()
+    .references(() => users.userId, { onDelete: "cascade" }),
+  action: varchar("action", { length: 20 }).notNull(),
+  revertedAt: timestamp("revertedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const notificationTypes = ["like", "match", "message", "comment", "purchase"] as const;
+export type NotificationType = (typeof notificationTypes)[number];
+
+export const notifications = pgTable("notifications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("userId")
+    .notNull()
+    .references(() => users.userId, { onDelete: "cascade" }),
+  type: varchar("type", { length: 20, enum: notificationTypes }).notNull(),
+  title: varchar("title", { length: 80 }).notNull(),
+  body: text("body").notNull(),
+  route: text("route"),
+  sourceId: text("sourceId"),
+  readAt: timestamp("readAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const pushTokens = pgTable(
+  "push_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("userId")
+      .notNull()
+      .references(() => users.userId, { onDelete: "cascade" }),
+    token: text("token").notNull(),
+    platform: varchar("platform", { length: 20 }).notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [unique("push_tokens_token_unique").on(table.token)],
+);
+
+export const billingEvents = pgTable("billing_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  providerEventId: text("providerEventId").notNull().unique(),
+  provider: varchar("provider", { length: 30 }).notNull(),
+  payloadHash: text("payloadHash").notNull(),
+  receivedAt: timestamp("receivedAt").defaultNow().notNull(),
 });
 
 export const matches = pgTable(
@@ -253,6 +369,24 @@ export const communityPostReports = pgTable(
   (table) => [unique("community_post_reports_postId_reporterUserId_unique").on(table.postId, table.reporterUserId)],
 );
 
+export const communityCommentReports = pgTable(
+  "community_comment_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    commentId: uuid("commentId")
+      .notNull()
+      .references(() => communityComments.id),
+    reporterUserId: uuid("reporterUserId")
+      .notNull()
+      .references(() => users.userId),
+    reason: text("reason").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (table) => [
+    unique("community_comment_reports_commentId_reporterUserId_unique").on(table.commentId, table.reporterUserId),
+  ],
+);
+
 export const scores = pgTable(
   "scores",
   {
@@ -270,6 +404,7 @@ export const scores = pgTable(
 );
 
 export type User = typeof users.$inferSelect;
+export type UserProfilePhoto = typeof userProfilePhotos.$inferSelect;
 export type RefreshToken = typeof refreshTokens.$inferSelect;
 export type AuthIdentity = typeof authIdentities.$inferSelect;
 export type PhoneVerification = typeof phoneVerifications.$inferSelect;
@@ -277,9 +412,17 @@ export type PhoneVerificationToken = typeof phoneVerificationTokens.$inferSelect
 export type KakaoPhoneVerificationToken = typeof kakaoPhoneVerificationTokens.$inferSelect;
 export type Room = typeof rooms.$inferSelect;
 export type Message = typeof messages.$inferSelect;
+export type ReadReceipt = typeof readReceipts.$inferSelect;
 export type UserLike = typeof userLikes.$inferSelect;
 export type UserSubscription = typeof userSubscriptions.$inferSelect;
+export type UserConsumableBalance = typeof userConsumableBalances.$inferSelect;
+export type UserBoost = typeof userBoosts.$inferSelect;
+export type MatchAction = typeof matchActions.$inferSelect;
+export type Notification = typeof notifications.$inferSelect;
+export type PushToken = typeof pushTokens.$inferSelect;
+export type BillingEvent = typeof billingEvents.$inferSelect;
 export type CommunityPost = typeof communityPosts.$inferSelect;
 export type CommunityProfile = typeof communityProfiles.$inferSelect;
 export type CommunityComment = typeof communityComments.$inferSelect;
+export type CommunityCommentReport = typeof communityCommentReports.$inferSelect;
 export type Score = typeof scores.$inferSelect;

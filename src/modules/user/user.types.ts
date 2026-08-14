@@ -1,4 +1,4 @@
-import { Field, InputType, ObjectType } from "@nestjs/graphql";
+import { Field, InputType, Int, ObjectType } from "@nestjs/graphql";
 
 @InputType()
 export class UpdateEmailInput {
@@ -27,7 +27,43 @@ export type UpdatePasswordRepositoryInput = UpdatePasswordInput & {
 };
 
 @ObjectType()
+export class ProfilePhotoPayload {
+  @Field()
+  id!: string;
+
+  @Field()
+  url!: string;
+
+  @Field(() => Int)
+  position!: number;
+}
+
+@InputType()
+export class UpdateUserProfileInput {
+  @Field()
+  userName!: string;
+
+  @Field()
+  birthDate!: string;
+
+  @Field()
+  region!: string;
+
+  @Field()
+  interestedGender!: string;
+
+  @Field()
+  intro!: string;
+
+  @Field(() => [String])
+  photoUrls!: string[];
+}
+
+@ObjectType()
 export class UserPayload {
+  @Field()
+  id!: string;
+
   @Field()
   email!: string;
 
@@ -42,10 +78,34 @@ export class UserPayload {
 
   @Field()
   intro!: string;
+
+  @Field({ nullable: true })
+  birthDate?: string;
+
+  @Field({ nullable: true })
+  region?: string;
+
+  @Field({ nullable: true })
+  interestedGender?: string;
+
+  @Field(() => [ProfilePhotoPayload])
+  photos!: ProfilePhotoPayload[];
+
+  @Field()
+  profileCompleted!: boolean;
 }
 
 @ObjectType()
 export class CurrentSubscriptionPayload {
   @Field()
   planId!: string;
+}
+
+@ObjectType()
+export class AccountDeletionPayload {
+  @Field()
+  hidden!: boolean;
+
+  @Field()
+  scheduledFor!: string;
 }

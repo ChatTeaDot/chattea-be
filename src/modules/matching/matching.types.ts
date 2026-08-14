@@ -1,6 +1,15 @@
 import { Field, InputType, Int, ObjectType } from "@nestjs/graphql";
 
 @ObjectType()
+export class MatchPhotoPayload {
+  @Field()
+  url!: string;
+
+  @Field(() => Int)
+  position!: number;
+}
+
+@ObjectType()
 export class MatchCandidatePayload {
   @Field()
   id!: string;
@@ -11,8 +20,17 @@ export class MatchCandidatePayload {
   @Field()
   gender!: string;
 
+  @Field(() => Int)
+  age!: number;
+
+  @Field()
+  region!: string;
+
   @Field()
   intro!: string;
+
+  @Field(() => [MatchPhotoPayload])
+  photos!: MatchPhotoPayload[];
 
   @Field()
   likedByMe!: boolean;
@@ -22,6 +40,9 @@ export class MatchCandidatePayload {
 
   @Field()
   blackRecommended!: boolean;
+
+  @Field()
+  boostActive!: boolean;
 }
 
 @ObjectType()
@@ -31,6 +52,27 @@ export class LikeUserPayload {
 
   @Field({ nullable: true })
   roomId?: string;
+
+  @Field()
+  undoAvailable!: boolean;
+}
+
+@ObjectType()
+export class UndoMatchActionPayload {
+  @Field()
+  reverted!: boolean;
+
+  @Field({ nullable: true })
+  targetUserId?: string;
+}
+
+@ObjectType()
+export class BoostPayload {
+  @Field()
+  activeUntil!: string;
+
+  @Field(() => Int)
+  remainingBoostCredits!: number;
 }
 
 @ObjectType()

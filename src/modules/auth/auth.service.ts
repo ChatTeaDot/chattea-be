@@ -7,7 +7,11 @@ import { CustomBadRequestException, CustomUnauthorizedException } from "src/comm
 import { Gender, User } from "src/modules/database/schema";
 import { UserService } from "src/modules/user/user.service";
 import { AuthErrorMessage } from "./auth.error";
-import { AuthRepository, KakaoPhoneVerificationTokenConsumeFailedError, PhoneVerificationTokenConsumeFailedError } from "./auth.repository";
+import {
+  AuthRepository,
+  KakaoPhoneVerificationTokenConsumeFailedError,
+  PhoneVerificationTokenConsumeFailedError,
+} from "./auth.repository";
 import { KakaoLoginResult, KakaoProfile, SigninAuthInput, SignupAuthInput } from "./auth.types";
 
 @Injectable()
@@ -72,6 +76,7 @@ export class AuthService {
       throw new CustomUnauthorizedException(AuthErrorMessage.PhoneVerificationRequired);
 
     await this.consumePhoneVerificationToken(input.phoneVerificationToken);
+    await this.userService.restoreIfWithinGrace(user.userId);
     this.logger.log(JSON.stringify({ event: "auth_signin", result: "success" }));
     return this.issueTokens(user, deviceId);
   }
@@ -133,6 +138,7 @@ export class AuthService {
         ),
       );
       if (!updatedUser) throw new CustomUnauthorizedException(AuthErrorMessage.InvalidKakaoPhoneVerificationToken);
+      await this.userService.restoreIfWithinGrace(updatedUser.userId);
       return this.issueTokens(updatedUser, deviceId);
     }
 

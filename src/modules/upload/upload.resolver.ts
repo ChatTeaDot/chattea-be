@@ -1,6 +1,7 @@
-import { Args, Mutation, Resolver } from "@nestjs/graphql";
+import { Args, Context, Mutation, Resolver } from "@nestjs/graphql";
 import { UseGuards } from "@nestjs/common";
 import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
+import { AuthRequest } from "src/modules/auth/auth.types";
 import { UploadService } from "./upload.service";
 import { CreateUploadInput, UploadPayload } from "./upload.types";
 
@@ -21,7 +22,7 @@ export class UploadResolver {
    */
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => UploadPayload)
-  createUpload(@Args("input") input: CreateUploadInput) {
-    return this.uploadService.createUpload(input);
+  createUpload(@Context("req") req: AuthRequest, @Args("input") input: CreateUploadInput) {
+    return this.uploadService.createUpload({ ...input, userId: req.user.userId });
   }
 }
