@@ -1,5 +1,5 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, count, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { Database, DRIZZLE } from "src/modules/database/database.module";
 import { matches, messageReports, messages, roomMembers, rooms, userBlocks, users } from "src/modules/database/schema";
 
@@ -37,7 +37,7 @@ export class ChatRepository {
         const lastMessage = await this.db.query.messages.findFirst({
           columns: { text: true },
           where: and(eq(messages.roomId, room.id), isNull(messages.deletedAt)),
-          orderBy: desc(messages.createdAt),
+          orderBy: [desc(messages.createdAt), desc(messages.id)],
         });
 
         return { id: room.id, name: room.name, lastMessage: lastMessage?.text ?? null, updatedAt: room.updatedAt };
@@ -53,7 +53,7 @@ export class ChatRepository {
    */
   async findMessageCursor(messageId: string, roomId: string) {
     return this.db.query.messages.findFirst({
-      columns: { createdAt: true },
+      columns: { id: true },
       where: and(eq(messages.id, messageId), eq(messages.roomId, roomId), isNull(messages.deletedAt)),
     });
   }
@@ -72,9 +72,19 @@ export class ChatRepository {
    * @param input 채팅방 ID, 조회 개수, 커서 시각
    * @returns 메시지 목록
    */
-  async messages(input: { roomId: string; limit: number; after?: Date | null }) {
+  async messages(input: { roomId: string; limit: number; after?: string | null }) {
     const where = input.after
-      ? and(eq(messages.roomId, input.roomId), isNull(messages.deletedAt), gt(messages.createdAt, input.after))
+      ? and(
+          eq(messages.roomId, input.roomId),
+          isNull(messages.deletedAt),
+          sql<boolean>`(${messages.createdAt}, ${messages.id}) > (
+            SELECT cursor."createdAt", cursor.id
+            FROM ${messages} AS cursor
+            WHERE cursor.id = ${input.after}
+              AND cursor."roomId" = ${input.roomId}
+              AND cursor."deletedAt" IS NULL
+          )`,
+        )
       : and(eq(messages.roomId, input.roomId), isNull(messages.deletedAt));
 
     return this.db
@@ -113,7 +123,6 @@ export class ChatRepository {
         eq(messages.idempotencyKey, idempotencyKey),
         eq(messages.roomId, roomId),
         eq(messages.senderUserId, senderUserId),
-        isNull(messages.deletedAt),
       ),
     });
   }
@@ -148,7 +157,12 @@ export class ChatRepository {
         text: input.text,
         idempotencyKey: input.idempotencyKey,
       })
+      .onConflictDoNothing({ target: [messages.roomId, messages.senderUserId, messages.idempotencyKey] })
       .returning();
+
+    if (!message && input.idempotencyKey) {
+      return this.findMessageByIdempotencyKey(input.idempotencyKey, input.roomId, input.senderUserId);
+    }
 
     await this.touchRoom(input.roomId);
     return message;
@@ -164,7 +178,13 @@ export class ChatRepository {
     const [message] = await this.db
       .update(messages)
       .set({ text: input.text, updatedAt: new Date() })
-      .where(and(eq(messages.id, input.messageId), eq(messages.senderUserId, input.senderUserId), isNull(messages.deletedAt)))
+      .where(
+        and(
+          eq(messages.id, input.messageId),
+          eq(messages.senderUserId, input.senderUserId),
+          isNull(messages.deletedAt),
+        ),
+      )
       .returning();
 
     if (message) await this.touchRoom(message.roomId);
@@ -205,10 +225,7 @@ export class ChatRepository {
    * @returns 저장 완료 Promise
    */
   async blockUser(blockerUserId: string, blockedUserId: string) {
-    await this.db
-      .insert(userBlocks)
-      .values({ blockerUserId, blockedUserId })
-      .onConflictDoNothing();
+    await this.db.insert(userBlocks).values({ blockerUserId, blockedUserId }).onConflictDoNothing();
   }
 
   /**
@@ -219,14 +236,20 @@ export class ChatRepository {
    * @param reason 신고 사유
    * @returns 저장 완료 Promise
    */
-  async reportMessage(reporterUserId: string, messageId: string, reason: string) {
-    await this.db
-      .insert(messageReports)
-      .values({ messageId, reporterUserId, reason })
-      .onConflictDoUpdate({
-        target: [messageReports.messageId, messageReports.reporterUserId],
-        set: { reason, createdAt: new Date() },
-      });
+  async reportMessage(reporterUserId: string, messageId: string, reason: string): Promise<boolean> {
+    const rows = await this.db.execute(sql`
+      INSERT INTO ${messageReports} ("messageId", "reporterUserId", reason)
+      SELECT ${messages.id}, ${reporterUserId}, ${reason}
+      FROM ${messages}
+      INNER JOIN ${roomMembers}
+        ON ${roomMembers.roomId} = ${messages.roomId}
+       AND ${roomMembers.userId} = ${reporterUserId}
+      WHERE ${messages.id} = ${messageId} AND ${messages.deletedAt} IS NULL
+      ON CONFLICT ("messageId", "reporterUserId") DO UPDATE
+        SET reason = EXCLUDED.reason, "createdAt" = now()
+      RETURNING id
+    `);
+    return rows.rowCount === 1;
   }
 
   private async touchRoom(roomId: string) {

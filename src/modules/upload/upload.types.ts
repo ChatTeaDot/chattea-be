@@ -1,4 +1,4 @@
-import { Field, InputType, ObjectType } from "@nestjs/graphql";
+import { Field, InputType, Int, ObjectType } from "@nestjs/graphql";
 
 @InputType()
 export class CreateUploadInput {
@@ -7,6 +7,9 @@ export class CreateUploadInput {
 
   @Field()
   contentType!: string;
+
+  @Field(() => Int)
+  sizeBytes!: number;
 }
 
 @ObjectType()
