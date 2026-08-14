@@ -10,6 +10,8 @@ import { ChatModule } from "./chat/chat.module";
 import { CommunityModule } from "./community/community.module";
 import { MatchingModule } from "./matching/matching.module";
 import { UploadModule } from "./upload/upload.module";
+import { NotificationModule } from "./notification/notification.module";
+import { BillingModule } from "./billing/billing.module";
 
 @Module({
   imports: [
@@ -30,6 +32,8 @@ import { UploadModule } from "./upload/upload.module";
     CommunityModule,
     MatchingModule,
     UploadModule,
+    NotificationModule,
+    BillingModule,
   ],
 })
 export class AppModule {}

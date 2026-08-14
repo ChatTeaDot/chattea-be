@@ -50,6 +50,24 @@ The runner applies `migrations/*.sql` in filename order and records checksums in
 
 Set `POSTGRES_SSL=true` for managed Postgres providers that require SSL.
 
+## Native app services
+
+Profile photos require a real public R2 origin. Configure all of the following before enabling uploads:
+
+```bash
+R2_ACCOUNT_ID=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET=
+R2_PUBLIC_BASE_URL=https://images.example.com
+```
+
+The server deliberately rejects profile uploads when this configuration is incomplete; it never returns a fake upload URL.
+
+RevenueCat webhooks are accepted at `POST /webhooks/revenuecat`. Set `REVENUECAT_WEBHOOK_SECRET` and send the HMAC-SHA256 value in `x-revenuecat-signature` (or `x-webhook-signature`). Events are committed with the entitlement or consumable balance in one database transaction, keyed by the RevenueCat event ID.
+
+Expo push delivery is opt-in. Set `EXPO_PUSH_ENABLED=true` and, if the Expo project requires it, `EXPO_PUSH_ACCESS_TOKEN`. A configured native client registers a device token through the `registerPushToken` GraphQL mutation; in-app notifications are persisted regardless of push delivery.
+
 ### Migration Rehearsal
 
 Use staging or a production snapshot before the production deploy:
