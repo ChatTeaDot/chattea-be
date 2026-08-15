@@ -1,4 +1,5 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
+import { NotificationService } from "src/modules/notification/notification.service";
 import { CommunityRepository } from "./community.repository";
 import { CommunityCommentPayload, CommunityPostPayload, CommunityProfilePayload } from "./community.types";
 
@@ -16,7 +17,10 @@ export class CommunityService {
    *
    * @param communityRepository 커뮤니티 저장소
    */
-  constructor(private readonly communityRepository: CommunityRepository) {}
+  constructor(
+    private readonly communityRepository: CommunityRepository,
+    @Optional() private readonly notificationService?: NotificationService,
+  ) {}
 
   /**
    * 커뮤니티 게시글 목록을 조회한다.
@@ -98,13 +102,24 @@ export class CommunityService {
   async createComment(userId: string, postId: string, body: string): Promise<CommunityCommentPayload> {
     validateUuid(userId, "USER_ID_INVALID");
     validateUuid(postId, "COMMUNITY_POST_ID_INVALID");
-    if (!(await this.communityRepository.findPost(postId))) throw new Error("COMMUNITY_POST_NOT_FOUND");
+    const post = await this.communityRepository.findPost(postId);
+    if (!post) throw new Error("COMMUNITY_POST_NOT_FOUND");
     const authorName = await this.authorName(userId);
     const comment = await this.communityRepository.createComment({
       userId,
       postId,
       body: validateText(body, COMMENT_MAX_LENGTH, "COMMUNITY_COMMENT"),
     });
+    if (this.notificationService && post.authorUserId !== userId) {
+      await this.notificationService.notify({
+        userId: post.authorUserId,
+        type: "comment",
+        title: "새 댓글이 달렸어요",
+        body: "내 글에 남긴 댓글을 확인해 보세요.",
+        route: `/community/${postId}`,
+        sourceId: comment.id,
+      });
+    }
     return rowToComment({ ...comment, authorName });
   }
 
@@ -122,6 +137,18 @@ export class CommunityService {
     await this.communityRepository.reportPost({
       userId,
       postId,
+      reason: validateText(reason, REPORT_REASON_MAX_LENGTH, "COMMUNITY_REPORT_REASON"),
+    });
+    return true;
+  }
+
+  async reportComment(userId: string, commentId: string, reason: string): Promise<boolean> {
+    validateUuid(userId, "USER_ID_INVALID");
+    validateUuid(commentId, "COMMUNITY_COMMENT_ID_INVALID");
+    if (!(await this.communityRepository.findComment(commentId))) throw new Error("COMMUNITY_COMMENT_NOT_FOUND");
+    await this.communityRepository.reportComment({
+      userId,
+      commentId,
       reason: validateText(reason, REPORT_REASON_MAX_LENGTH, "COMMUNITY_REPORT_REASON"),
     });
     return true;

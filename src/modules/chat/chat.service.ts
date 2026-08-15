@@ -1,5 +1,6 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
 import { CustomUnauthorizedException } from "src/common/errors/custom-exceptions";
+import { NotificationService } from "src/modules/notification/notification.service";
 import { ChatRepository } from "./chat.repository";
 import { AiSummaryPreviewPayload, ChatMessagePayload, ChatRoomPayload } from "./chat.types";
 
@@ -18,7 +19,10 @@ export class ChatService {
    *
    * @param chatRepository 채팅 저장소
    */
-  constructor(private readonly chatRepository: ChatRepository) {}
+  constructor(
+    private readonly chatRepository: ChatRepository,
+    @Optional() private readonly notificationService?: NotificationService,
+  ) {}
 
   /**
    * 채팅방 목록을 조회한다.
@@ -33,6 +37,7 @@ export class ChatService {
       id: room.id,
       name: room.name,
       lastMessage: room.lastMessage,
+      unreadCount: room.unreadCount,
     }));
   }
 
@@ -94,6 +99,21 @@ export class ChatService {
     });
     if (!message) throw new Error("MESSAGE_CREATE_FAILED");
     if (message.deletedAt) throw new Error("IDEMPOTENCY_KEY_ALREADY_USED");
+    if (this.notificationService) {
+      const recipientIds = await this.chatRepository.otherRoomMemberIds(input.roomId, userId);
+      await Promise.allSettled(
+        recipientIds.map((recipientId) =>
+          this.notificationService?.notify({
+            userId: recipientId,
+            type: "message",
+            title: "새 메시지가 도착했어요",
+            body: text.slice(0, 60),
+            route: `/rooms/${input.roomId}`,
+            sourceId: message.id,
+          }),
+        ),
+      );
+    }
     return rowToMessage(message);
   }
 

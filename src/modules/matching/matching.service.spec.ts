@@ -13,8 +13,18 @@ describe("MatchingService", () => {
     await expect(service.likeUser(userId, userId)).rejects.toThrow("LIKE_SELF_NOT_ALLOWED");
   });
 
+  it("requires a completed profile before exposing matches", async () => {
+    const repository = {
+      profileIsComplete: jest.fn<() => Promise<boolean>>().mockResolvedValue(false),
+    } as unknown as MatchingRepository;
+    const service = new MatchingService(repository, {} as UserRepository);
+
+    await expect(service.candidates(userId)).rejects.toThrow("PROFILE_COMPLETION_REQUIRED");
+  });
+
   it("limits liked-me access by plan window", async () => {
     const repository = {
+      profileIsComplete: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
       findLikedMeAccess: jest.fn<() => Promise<{ viewedCount: number }>>().mockResolvedValue({ viewedCount: 3 }),
     } as unknown as MatchingRepository;
     const userRepository = {
@@ -30,17 +40,22 @@ describe("MatchingService", () => {
   it("passes daily like limits to repository", async () => {
     const matched = { matched: false, roomId: undefined };
     const repository = {
-      likeUser: jest.fn<() => Promise<{ matched: typeof matched }>>().mockResolvedValue({ matched }),
+      profileIsComplete: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      actOnCandidate: jest.fn<() => Promise<typeof matched>>().mockResolvedValue(matched),
     } as unknown as MatchingRepository;
     const userRepository = {
       findCurrentSubscription: jest.fn<() => Promise<{ planId: string }>>().mockResolvedValue({ planId: "basic" }),
     } as unknown as UserRepository;
     const service = new MatchingService(repository, userRepository);
 
-    await expect(service.likeUser(userId, likedUserId, new Date("2026-01-01T04:30:00.000Z"))).resolves.toEqual(matched);
-    expect(repository.likeUser).toHaveBeenCalledWith({
+    await expect(service.likeUser(userId, likedUserId, new Date("2026-01-01T04:30:00.000Z"))).resolves.toEqual({
+      ...matched,
+      undoAvailable: true,
+    });
+    expect(repository.actOnCandidate).toHaveBeenCalledWith({
       userId,
-      likedUserId,
+      targetUserId: likedUserId,
+      action: "like",
       dailyLimit: 20,
       dayStart: new Date("2026-01-01T00:00:00.000Z"),
       dayEnd: new Date("2026-01-02T00:00:00.000Z"),

@@ -1,36 +1,25 @@
-import { Args, Context, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { UseGuards } from "@nestjs/common";
+import { Args, Context, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
 import { UserService } from "./user.service";
-import { CurrentSubscriptionPayload, UpdateEmailInput, UpdatePasswordInput, UserPayload } from "./user.types";
+import {
+  AccountDeletionPayload,
+  CurrentSubscriptionPayload,
+  UpdateEmailInput,
+  UpdatePasswordInput,
+  UpdateUserProfileInput,
+  UserPayload,
+} from "./user.types";
 
 @Resolver()
 export class UserResolver {
-  /**
-   * UserResolver에서 사용할 UserService 의존성을 주입한다.
-   *
-   * @param userService 사용자 서비스
-   */
   constructor(private readonly userService: UserService) {}
 
-  /**
-   * 현재 로그인한 사용자의 프로필을 조회한다.
-   *
-   * @param req 인증 요청 객체
-   * @returns 사용자 프로필
-   */
   @UseGuards(JwtAccessTokenGuard)
   @Query(() => UserPayload)
   async me(@Context("req") req: AuthRequest) {
-    const user = await this.userService.findUser(req.user.userId);
-    return {
-      email: user.email,
-      phone: user.phone ?? undefined,
-      userName: user.userName,
-      gender: user.gender,
-      intro: user.intro,
-    };
+    return toUserPayload(await this.userService.profile(req.user.userId));
   }
 
   @UseGuards(JwtAccessTokenGuard)
@@ -39,13 +28,12 @@ export class UserResolver {
     return this.userService.currentSubscription(req.user.userId);
   }
 
-  /**
-   * 현재 로그인한 사용자의 이메일을 변경한다.
-   *
-   * @param req 인증 요청 객체
-   * @param input 이메일 변경 입력값
-   * @returns 변경 성공 여부
-   */
+  @UseGuards(JwtAccessTokenGuard)
+  @Mutation(() => UserPayload)
+  async updateUserProfile(@Context("req") req: AuthRequest, @Args("input") input: UpdateUserProfileInput) {
+    return toUserPayload(await this.userService.updateProfile(req.user.userId, input));
+  }
+
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => Boolean)
   async updateEmail(@Context("req") req: AuthRequest, @Args("input") input: UpdateEmailInput) {
@@ -53,17 +41,30 @@ export class UserResolver {
     return true;
   }
 
-  /**
-   * 현재 로그인한 사용자의 비밀번호를 변경한다.
-   *
-   * @param req 인증 요청 객체
-   * @param input 비밀번호 변경 입력값
-   * @returns 변경 성공 여부
-   */
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => Boolean)
   async updatePassword(@Context("req") req: AuthRequest, @Args("input") input: UpdatePasswordInput) {
     await this.userService.updatePassword({ ...input, userId: req.user.userId });
     return true;
   }
+
+  @UseGuards(JwtAccessTokenGuard)
+  @Mutation(() => AccountDeletionPayload)
+  requestAccountDeletion(@Context("req") req: AuthRequest) {
+    return this.userService.beginAccountDeletion(req.user.userId);
+  }
 }
+
+const toUserPayload = (user: Awaited<ReturnType<UserService["profile"]>>): UserPayload => ({
+  id: user.userId,
+  email: user.email,
+  phone: user.phone ?? undefined,
+  userName: user.userName,
+  gender: user.gender,
+  intro: user.intro,
+  birthDate: user.birthDate ?? undefined,
+  region: user.region ?? undefined,
+  interestedGender: user.interestedGender ?? undefined,
+  photos: user.photos.map((photo) => ({ id: photo.id, url: photo.url, position: photo.position })),
+  profileCompleted: Boolean(user.profileCompletedAt && user.photos.length >= 1),
+});

@@ -2,6 +2,7 @@ import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./modules/app.module";
 import { Logger } from "@nestjs/common";
 import cookieParser from "cookie-parser";
+import express, { Request } from "express";
 import passport from "passport";
 import { randomUUID } from "crypto";
 import { DatadogLogger } from "src/common/logging/datadog-logger";
@@ -12,8 +13,20 @@ import { DatadogLogger } from "src/common/logging/datadog-logger";
  * @returns 서버 시작 완료 Promise
  */
 const bootstrap = async () => {
-  const app = await NestFactory.create(AppModule, { logger: new DatadogLogger() });
+  const app = await NestFactory.create(AppModule, {
+    logger: new DatadogLogger(),
+    bodyParser: false,
+  });
   const logger = new Logger("Http");
+
+  app.use(
+    express.json({
+      verify: (req: Request & { rawBody?: Buffer }, _res, buffer) => {
+        req.rawBody = Buffer.from(buffer);
+      },
+    }),
+  );
+  app.use(express.urlencoded({ extended: true }));
 
   app
     .getHttpAdapter()

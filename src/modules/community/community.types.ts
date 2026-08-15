@@ -66,6 +66,15 @@ export class ReportCommunityPostInput {
   reason!: string;
 }
 
+@InputType()
+export class ReportCommunityCommentInput {
+  @Field()
+  commentId!: string;
+
+  @Field()
+  reason!: string;
+}
+
 @ObjectType()
 export class CommunityProfilePayload {
   @Field()

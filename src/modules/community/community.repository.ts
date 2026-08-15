@@ -1,7 +1,13 @@
 import { Inject, Injectable } from "@nestjs/common";
 import { and, asc, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Database, DRIZZLE } from "src/modules/database/database.module";
-import { communityComments, communityPostReports, communityPosts, communityProfiles } from "src/modules/database/schema";
+import {
+  communityCommentReports,
+  communityComments,
+  communityPostReports,
+  communityPosts,
+  communityProfiles,
+} from "src/modules/database/schema";
 
 @Injectable()
 export class CommunityRepository {
@@ -106,6 +112,12 @@ export class CommunityRepository {
     return comment;
   }
 
+  async findComment(commentId: string) {
+    return this.db.query.communityComments.findFirst({
+      where: and(eq(communityComments.id, commentId), isNull(communityComments.deletedAt)),
+    });
+  }
+
   /**
    * 게시글 신고 사유를 저장하거나 갱신한다.
    *
@@ -122,6 +134,16 @@ export class CommunityRepository {
       })
       .onConflictDoUpdate({
         target: [communityPostReports.postId, communityPostReports.reporterUserId],
+        set: { reason: input.reason, createdAt: new Date() },
+      });
+  }
+
+  async reportComment(input: { userId: string; commentId: string; reason: string }) {
+    await this.db
+      .insert(communityCommentReports)
+      .values({ commentId: input.commentId, reporterUserId: input.userId, reason: input.reason })
+      .onConflictDoUpdate({
+        target: [communityCommentReports.commentId, communityCommentReports.reporterUserId],
         set: { reason: input.reason, createdAt: new Date() },
       });
   }

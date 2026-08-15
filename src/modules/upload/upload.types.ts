@@ -19,4 +19,7 @@ export class UploadPayload {
 
   @Field()
   putUrl!: string;
+
+  @Field({ nullable: true })
+  publicUrl?: string;
 }

@@ -1,7 +1,16 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, count, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
 import { Database, DRIZZLE } from "src/modules/database/database.module";
-import { matches, messageReports, messages, roomMembers, rooms, userBlocks, users } from "src/modules/database/schema";
+import {
+  matches,
+  messageReports,
+  messages,
+  readReceipts,
+  roomMembers,
+  rooms,
+  userBlocks,
+  users,
+} from "src/modules/database/schema";
 
 @Injectable()
 export class ChatRepository {
@@ -40,7 +49,14 @@ export class ChatRepository {
           orderBy: [desc(messages.createdAt), desc(messages.id)],
         });
 
-        return { id: room.id, name: room.name, lastMessage: lastMessage?.text ?? null, updatedAt: room.updatedAt };
+        const unreadCount = await this.unreadMessageCount(room.id, userId);
+        return {
+          id: room.id,
+          name: room.name,
+          lastMessage: lastMessage?.text ?? null,
+          unreadCount: Number(unreadCount),
+          updatedAt: room.updatedAt,
+        };
       }),
     );
   }
@@ -64,6 +80,14 @@ export class ChatRepository {
       where: and(eq(roomMembers.roomId, roomId), eq(roomMembers.userId, userId)),
     });
     return Boolean(member);
+  }
+
+  async otherRoomMemberIds(roomId: string, userId: string): Promise<string[]> {
+    const members = await this.db.query.roomMembers.findMany({
+      columns: { userId: true },
+      where: and(eq(roomMembers.roomId, roomId), sql`${roomMembers.userId} <> ${userId}`),
+    });
+    return members.map((member) => member.userId);
   }
 
   /**
@@ -91,6 +115,7 @@ export class ChatRepository {
       .select({
         id: messages.id,
         roomId: messages.roomId,
+        senderUserId: messages.senderUserId,
         text: messages.text,
         idempotencyKey: messages.idempotencyKey,
         createdAt: messages.createdAt,
@@ -254,5 +279,24 @@ export class ChatRepository {
 
   private async touchRoom(roomId: string) {
     await this.db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, roomId));
+  }
+
+  private async unreadMessageCount(roomId: string, userId: string): Promise<number | string> {
+    const receipt = await this.db.query.readReceipts.findFirst({
+      columns: { readAt: true },
+      where: and(eq(readReceipts.roomId, roomId), eq(readReceipts.userId, userId)),
+    });
+    const [row] = await this.db
+      .select({ count: count() })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.roomId, roomId),
+          sql`${messages.senderUserId} <> ${userId}`,
+          isNull(messages.deletedAt),
+          receipt ? gt(messages.createdAt, receipt.readAt) : undefined,
+        ),
+      );
+    return row?.count ?? 0;
   }
 }

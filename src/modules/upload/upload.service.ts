@@ -18,10 +18,16 @@ export class UploadService {
    * @param input 파일명과 content type
    * @returns 업로드 ID와 PUT URL
    */
-  async createUpload(input: { filename: string; contentType: string; sizeBytes: number }): Promise<UploadPayload> {
+  async createUpload(input: {
+    userId?: string;
+    filename: string;
+    contentType: string;
+    sizeBytes: number;
+  }): Promise<UploadPayload> {
     const filename = input.filename.trim();
     const contentType = input.contentType.trim().toLowerCase();
     if (!filename) throw new Error("UPLOAD_FILENAME_REQUIRED");
+    if (input.userId && !isUuid(input.userId)) throw new Error("UPLOAD_USER_ID_INVALID");
     const allowedExtension = ALLOWED_IMAGE_TYPES.get(contentType);
     if (!allowedExtension) throw new Error("UPLOAD_CONTENT_TYPE_UNSUPPORTED");
     const sizeBytes = input.sizeBytes;
@@ -38,11 +44,16 @@ export class UploadService {
     const suppliedExtension = safeExtension(filename);
     if (!suppliedExtension || !allowedExtension.includes(suppliedExtension))
       throw new Error("UPLOAD_EXTENSION_UNSUPPORTED");
-    const objectKey = `uploads/${id}.${allowedExtension[0]}`;
+    const objectKey = `${input.userId ? `profiles/${input.userId}` : "uploads"}/${id}.${allowedExtension[0]}`;
+    const publicBaseUrl = this.configService.get<string>("R2_PUBLIC_BASE_URL")?.replace(/\/+$/, "");
+    if (input.userId && !publicBaseUrl) throw new Error("R2_CONFIG_REQUIRED");
 
     return {
       id,
       putUrl: await this.createPresignedPutUrl({ objectKey, contentType, sizeBytes }),
+      publicUrl: input.userId && publicBaseUrl
+        ? `${publicBaseUrl}/${objectKey.split("/").map(encodeURIComponent).join("/")}`
+        : undefined,
     };
   }
 
@@ -116,3 +127,5 @@ const toAmzDate = (date: Date): string => date.toISOString().replace(/[:-]|\.\d{
 const sha256Hex = (value: string): string => createHash("sha256").update(value).digest("hex");
 const hmac = (key: string | Buffer, value: string): Buffer => createHmac("sha256", key).update(value).digest();
 const hmacHex = (key: string | Buffer, value: string): string => createHmac("sha256", key).update(value).digest("hex");
+const isUuid = (value: string): boolean =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
