@@ -7,52 +7,69 @@ describe("UploadService", () => {
     const service = new UploadService({} as ConfigService);
 
     await expect(
-      service.createUpload({
-        userId: "5f29b801-2c88-4b0a-97db-f68bbfa03270",
-        filename: "file.txt",
-        contentType: "text/plain",
-      }),
+      service.createUpload({ filename: "file.txt", contentType: "text/plain", sizeBytes: 5 }),
     ).rejects.toThrow("UPLOAD_CONTENT_TYPE_UNSUPPORTED");
   });
 
-  it("requires configured object storage instead of returning a fake upload URL", async () => {
+  it("creates a fallback upload URL without R2 config", async () => {
     const configService = {
       get: jest.fn<() => undefined>().mockReturnValue(undefined),
     } as unknown as ConfigService;
     const service = new UploadService(configService);
 
-    await expect(
-      service.createUpload({
-        userId: "5f29b801-2c88-4b0a-97db-f68bbfa03270",
-        filename: "photo.JPG",
-        contentType: " image/jpeg ",
-      }),
-    ).rejects.toThrow("R2_CONFIG_REQUIRED");
-  });
-
-  it("returns an object-scoped public URL with complete R2 configuration", async () => {
-    const configService = {
-      get: jest.fn<(key: string) => string | undefined>().mockImplementation((key) => {
-        const config: Record<string, string> = {
-          R2_ACCOUNT_ID: "account",
-          R2_ACCESS_KEY_ID: "access",
-          R2_SECRET_ACCESS_KEY: "secret",
-          R2_BUCKET: "chattea",
-          R2_PUBLIC_BASE_URL: "https://images.chattea.example",
-        };
-        return config[key];
-      }),
-    } as unknown as ConfigService;
-    const service = new UploadService(configService);
-
     const result = await service.createUpload({
-      userId: "5f29b801-2c88-4b0a-97db-f68bbfa03270",
-      filename: "photo.JPG",
-      contentType: "image/jpeg",
+      filename: "내 사진.JPG",
+      contentType: " image/jpeg ",
+      sizeBytes: 5,
     });
 
     expect(result.id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(result.putUrl).toContain("https://account.r2.cloudflarestorage.com/chattea/profiles/");
-    expect(result.publicUrl).toContain("https://images.chattea.example/profiles/");
+    expect(result.putUrl).toContain("https://uploads.invalid/uploads%2F");
+    expect(result.putUrl).toContain(".jpg?contentType=image%2Fjpeg");
+    expect(result.putUrl).toContain("sizeBytes=5");
+  });
+
+  it.each([
+    { filename: "attack.svg", contentType: "image/svg+xml", sizeBytes: 5 },
+    { filename: "attack.exe.jpg", contentType: "image/png", sizeBytes: 5 },
+    { filename: "../photo.jpg", contentType: "image/jpeg", sizeBytes: 5 },
+  ])("rejects untrusted upload metadata: $filename", async (input) => {
+    const service = new UploadService({ get: () => undefined } as unknown as ConfigService);
+    await expect(service.createUpload(input)).rejects.toThrow(/UPLOAD_(CONTENT_TYPE|EXTENSION)_UNSUPPORTED/);
+  });
+
+  it("rejects files over the allowlisted size", async () => {
+    const service = new UploadService({ get: () => undefined } as unknown as ConfigService);
+    await expect(
+      service.createUpload({ filename: "photo.png", contentType: "image/png", sizeBytes: 10 * 1024 * 1024 + 1 }),
+    ).rejects.toThrow("UPLOAD_SIZE_INVALID");
+  });
+
+  it("rejects uploads with an invalid declared byte length", async () => {
+    const service = new UploadService({ get: () => undefined } as unknown as ConfigService);
+    await expect(
+      service.createUpload({ filename: "photo.png", contentType: "image/png", sizeBytes: 0 }),
+    ).rejects.toThrow("UPLOAD_SIZE_INVALID");
+  });
+
+  it("binds the declared byte length to the signed upload request", async () => {
+    const service = new UploadService({
+      get: (key: string) =>
+        ({
+          R2_ACCESS_KEY_ID: "access",
+          R2_ACCOUNT_ID: "account",
+          R2_BUCKET: "bucket",
+          R2_SECRET_ACCESS_KEY: "secret",
+        })[key],
+    } as unknown as ConfigService);
+
+    const result = await service.createUpload({
+      filename: "photo.jpg",
+      contentType: "image/jpeg",
+      sizeBytes: 4096,
+    });
+    const url = new URL(result.putUrl);
+
+    expect(url.searchParams.get("X-Amz-SignedHeaders")).toBe("content-length;content-type;host");
   });
 });

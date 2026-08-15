@@ -46,7 +46,11 @@ export class MatchingRepository {
     if (!viewer) return [];
 
     const viewerGenderFilter =
-      viewer.interestedGender === "everyone" ? undefined : eq(users.gender, viewer.interestedGender ?? "__none__");
+      viewer.interestedGender === "everyone"
+        ? undefined
+        : viewer.interestedGender
+          ? eq(users.gender, viewer.interestedGender)
+          : sql<boolean>`false`;
     const targetInterestFilter = or(eq(users.interestedGender, "everyone"), eq(users.interestedGender, viewer.gender));
 
     const rows = await this.db

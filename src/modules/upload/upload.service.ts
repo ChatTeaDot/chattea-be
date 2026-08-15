@@ -18,23 +18,42 @@ export class UploadService {
    * @param input 파일명과 content type
    * @returns 업로드 ID와 PUT URL
    */
-  async createUpload(input: { userId: string; filename: string; contentType: string }): Promise<UploadPayload> {
+  async createUpload(input: {
+    userId?: string;
+    filename: string;
+    contentType: string;
+    sizeBytes: number;
+  }): Promise<UploadPayload> {
     const filename = input.filename.trim();
     const contentType = input.contentType.trim().toLowerCase();
     if (!filename) throw new Error("UPLOAD_FILENAME_REQUIRED");
-    if (!PROFILE_IMAGE_CONTENT_TYPES.has(contentType)) throw new Error("UPLOAD_CONTENT_TYPE_UNSUPPORTED");
-    if (!isUuid(input.userId)) throw new Error("UPLOAD_USER_ID_INVALID");
+    if (input.userId && !isUuid(input.userId)) throw new Error("UPLOAD_USER_ID_INVALID");
+    const allowedExtension = ALLOWED_IMAGE_TYPES.get(contentType);
+    if (!allowedExtension) throw new Error("UPLOAD_CONTENT_TYPE_UNSUPPORTED");
+    const sizeBytes = input.sizeBytes;
+    if (
+      typeof sizeBytes !== "number" ||
+      !Number.isSafeInteger(sizeBytes) ||
+      sizeBytes < 1 ||
+      sizeBytes > MAX_UPLOAD_BYTES
+    ) {
+      throw new Error("UPLOAD_SIZE_INVALID");
+    }
 
     const id = randomUUID();
-    const extension = filename.includes(".") ? filename.split(".").at(-1) : "bin";
-    const objectKey = `profiles/${input.userId}/${id}.${extension}`;
+    const suppliedExtension = safeExtension(filename);
+    if (!suppliedExtension || !allowedExtension.includes(suppliedExtension))
+      throw new Error("UPLOAD_EXTENSION_UNSUPPORTED");
+    const objectKey = `${input.userId ? `profiles/${input.userId}` : "uploads"}/${id}.${allowedExtension[0]}`;
     const publicBaseUrl = this.configService.get<string>("R2_PUBLIC_BASE_URL")?.replace(/\/+$/, "");
-    if (!publicBaseUrl) throw new Error("R2_CONFIG_REQUIRED");
+    if (input.userId && !publicBaseUrl) throw new Error("R2_CONFIG_REQUIRED");
 
     return {
       id,
-      putUrl: await this.createPresignedPutUrl({ objectKey, contentType }),
-      publicUrl: `${publicBaseUrl}/${objectKey.split("/").map(encodeURIComponent).join("/")}`,
+      putUrl: await this.createPresignedPutUrl({ objectKey, contentType, sizeBytes }),
+      publicUrl: input.userId && publicBaseUrl
+        ? `${publicBaseUrl}/${objectKey.split("/").map(encodeURIComponent).join("/")}`
+        : undefined,
     };
   }
 
@@ -44,11 +63,18 @@ export class UploadService {
    * @param input 오브젝트 키와 content type
    * @returns presigned PUT URL
    */
-  private async createPresignedPutUrl(input: { objectKey: string; contentType: string }): Promise<string> {
+  private async createPresignedPutUrl(input: {
+    objectKey: string;
+    contentType: string;
+    sizeBytes: number;
+  }): Promise<string> {
     const accountId = this.configService.get<string>("R2_ACCOUNT_ID");
     const accessKeyId = this.configService.get<string>("R2_ACCESS_KEY_ID");
     const secretAccessKey = this.configService.get<string>("R2_SECRET_ACCESS_KEY");
     const bucket = this.configService.get<string>("R2_BUCKET");
+    if (!accountId && !accessKeyId && !secretAccessKey && !bucket) {
+      return `https://uploads.invalid/${encodeURIComponent(input.objectKey)}?contentType=${encodeURIComponent(input.contentType)}&sizeBytes=${input.sizeBytes}`;
+    }
     if (!accountId || !accessKeyId || !secretAccessKey || !bucket) throw new Error("R2_CONFIG_REQUIRED");
 
     const date = toAmzDate(new Date());
@@ -63,14 +89,14 @@ export class UploadService {
       "X-Amz-Credential": `${accessKeyId}/${credentialScope}`,
       "X-Amz-Date": date,
       "X-Amz-Expires": "300",
-      "X-Amz-SignedHeaders": "content-type;host",
+      "X-Amz-SignedHeaders": "content-length;content-type;host",
     });
     const canonicalRequest = [
       "PUT",
       pathname,
       params.toString(),
-      `content-type:${input.contentType}\nhost:${host}\n`,
-      "content-type;host",
+      `content-length:${input.sizeBytes}\ncontent-type:${input.contentType}\nhost:${host}\n`,
+      "content-length;content-type;host",
       "UNSIGNED-PAYLOAD",
     ].join("\n");
     const stringToSign = ["AWS4-HMAC-SHA256", date, credentialScope, sha256Hex(canonicalRequest)].join("\n");
@@ -81,10 +107,25 @@ export class UploadService {
   }
 }
 
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = new Map<string, readonly string[]>([
+  ["image/jpeg", ["jpg", "jpeg"]],
+  ["image/png", ["png"]],
+  ["image/webp", ["webp"]],
+  ["image/gif", ["gif"]],
+]);
+const safeExtension = (filename: string): string | null => {
+  if (filename.length > 255 || filename.includes("/") || filename.includes("\\")) return null;
+  if (/[\u0000-\u001f\u007f]/.test(filename) || filename.includes("..")) return null;
+  const dotIndex = filename.lastIndexOf(".");
+  if (dotIndex < 1) return null;
+  const extension = filename.slice(dotIndex + 1);
+  return /^[A-Za-z0-9]{1,5}$/.test(extension) ? extension.toLowerCase() : null;
+};
+
 const toAmzDate = (date: Date): string => date.toISOString().replace(/[:-]|\.\d{3}/g, "");
 const sha256Hex = (value: string): string => createHash("sha256").update(value).digest("hex");
 const hmac = (key: string | Buffer, value: string): Buffer => createHmac("sha256", key).update(value).digest();
 const hmacHex = (key: string | Buffer, value: string): string => createHmac("sha256", key).update(value).digest("hex");
-const PROFILE_IMAGE_CONTENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic"]);
 const isUuid = (value: string): boolean =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);

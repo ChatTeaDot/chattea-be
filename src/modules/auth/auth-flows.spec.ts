@@ -26,6 +26,13 @@ describe("auth flows (e2e)", () => {
     userName: "user",
     gender: "female",
     intro: "",
+    birthDate: null,
+    region: null,
+    interestedGender: null,
+    profileCompletedAt: null,
+    hiddenAt: null,
+    deletionScheduledAt: null,
+    deletedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -120,7 +127,10 @@ describe("auth flows (e2e)", () => {
       saveRefreshToken: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
       deleteRefreshToken: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
     } as unknown as AuthRepository;
-    const userService = { findUser: jest.fn<() => Promise<User>>().mockResolvedValue(user) } as unknown as UserService;
+    const userService = {
+      findUser: jest.fn<() => Promise<User>>().mockResolvedValue(user),
+      restoreIfWithinGrace: jest.fn<() => Promise<boolean>>().mockResolvedValue(false),
+    } as unknown as UserService;
     const auth = new AuthService(repository, services.jwtService, services.configService, userService);
 
     await expect(

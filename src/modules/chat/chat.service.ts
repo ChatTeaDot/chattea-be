@@ -1,4 +1,5 @@
 import { Injectable, Optional } from "@nestjs/common";
+import { CustomUnauthorizedException } from "src/common/errors/custom-exceptions";
 import { NotificationService } from "src/modules/notification/notification.service";
 import { ChatRepository } from "./chat.repository";
 import { AiSummaryPreviewPayload, ChatMessagePayload, ChatRoomPayload } from "./chat.types";
@@ -6,6 +7,7 @@ import { AiSummaryPreviewPayload, ChatMessagePayload, ChatRoomPayload } from "./
 const FIRST_MESSAGE_MAX_LENGTH = 30;
 const MESSAGE_MAX_LENGTH = 90;
 const REPORT_REASON_MAX_LENGTH = 120;
+const IDEMPOTENCY_KEY_MAX_LENGTH = 128;
 const SUMMARY_MIN_LENGTH = 30;
 const SUMMARY_MAX_SOURCE_LENGTH = 180;
 const SUMMARY_PLAN_IDS = new Set(["gold", "black"]);
@@ -45,23 +47,18 @@ export class ChatService {
    * @param input 채팅방 ID와 페이지 입력값
    * @returns 메시지 목록
    */
-  async messages(input: {
-    roomId: string;
-    userId: string;
-    first?: number | null;
-    after?: string | null;
-  }): Promise<ChatMessagePayload[]> {
+  async messages(
+    userId: string,
+    input: { roomId: string; first?: number | null; after?: string | null },
+  ): Promise<ChatMessagePayload[]> {
     this.validateUuid(input.roomId, "ROOM_ID_INVALID");
-    this.validateUuid(input.userId, "USER_ID_INVALID");
-    if (!(await this.chatRepository.hasRoomMember(input.roomId, input.userId))) throw new Error("ROOM_ACCESS_DENIED");
+    await this.requireRoomMember(input.roomId, userId);
     const limit = Math.min(input.first ?? 50, 100);
-    const cursor = input.after ? await this.chatRepository.findMessageCursor(input.after) : null;
-    const result = await this.chatRepository.messages({
-      roomId: input.roomId,
-      limit,
-      after: cursor?.createdAt,
-      viewerUserId: input.userId,
-    });
+    if (limit < 1) throw new Error("MESSAGE_PAGE_SIZE_INVALID");
+    if (input.after) this.validateUuid(input.after, "MESSAGE_CURSOR_INVALID");
+    const cursor = input.after ? await this.chatRepository.findMessageCursor(input.after, input.roomId) : null;
+    if (input.after && !cursor) throw new Error("MESSAGE_CURSOR_INVALID");
+    const result = await this.chatRepository.messages({ roomId: input.roomId, limit, after: cursor?.id });
 
     return result.map(rowToMessage);
   }
@@ -72,21 +69,21 @@ export class ChatService {
    * @param input 메시지 전송 입력값
    * @returns 생성되었거나 idempotency key로 조회된 메시지
    */
-  async sendMessage(input: {
-    roomId: string;
-    senderUserId: string;
-    text: string;
-    idempotencyKey?: string | null;
-  }): Promise<ChatMessagePayload> {
+  async sendMessage(
+    userId: string,
+    input: { roomId: string; text: string; idempotencyKey?: string | null },
+  ): Promise<ChatMessagePayload> {
     const text = this.validateText(input.text);
     this.validateUuid(input.roomId, "ROOM_ID_INVALID");
-    this.validateUuid(input.senderUserId, "USER_ID_INVALID");
-    if (!(await this.chatRepository.hasRoomMember(input.roomId, input.senderUserId)))
-      throw new Error("ROOM_ACCESS_DENIED");
+    await this.requireRoomMember(input.roomId, userId);
 
-    if (input.idempotencyKey) {
-      const existing = await this.chatRepository.findMessageByIdempotencyKey(input.idempotencyKey);
-      if (existing) return rowToMessage(existing);
+    const idempotencyKey = validateIdempotencyKey(input.idempotencyKey);
+    if (idempotencyKey) {
+      const existing = await this.chatRepository.findMessageByIdempotencyKey(idempotencyKey, input.roomId, userId);
+      if (existing) {
+        if (existing.deletedAt) throw new Error("IDEMPOTENCY_KEY_ALREADY_USED");
+        return rowToMessage(existing);
+      }
     }
 
     const count = await this.chatRepository.activeMessageCount(input.roomId);
@@ -94,20 +91,29 @@ export class ChatService {
       throw new Error("FIRST_MESSAGE_TEXT_TOO_LONG");
     }
 
-    const message = await this.chatRepository.createMessage({ ...input, text });
-    const recipientIds = await this.chatRepository.otherRoomMemberIds(input.roomId, input.senderUserId);
-    await Promise.all(
-      recipientIds.map((userId) =>
-        this.notificationService?.notify({
-          userId,
-          type: "message",
-          title: "새 메시지가 도착했어요",
-          body: text.slice(0, 60),
-          route: `/rooms/${input.roomId}`,
-          sourceId: message.id,
-        }),
-      ),
-    );
+    const message = await this.chatRepository.createMessage({
+      roomId: input.roomId,
+      senderUserId: userId,
+      text,
+      idempotencyKey,
+    });
+    if (!message) throw new Error("MESSAGE_CREATE_FAILED");
+    if (message.deletedAt) throw new Error("IDEMPOTENCY_KEY_ALREADY_USED");
+    if (this.notificationService) {
+      const recipientIds = await this.chatRepository.otherRoomMemberIds(input.roomId, userId);
+      await Promise.allSettled(
+        recipientIds.map((recipientId) =>
+          this.notificationService?.notify({
+            userId: recipientId,
+            type: "message",
+            title: "새 메시지가 도착했어요",
+            body: text.slice(0, 60),
+            route: `/rooms/${input.roomId}`,
+            sourceId: message.id,
+          }),
+        ),
+      );
+    }
     return rowToMessage(message);
   }
 
@@ -117,12 +123,10 @@ export class ChatService {
    * @param input 메시지 수정 입력값
    * @returns 수정된 메시지
    */
-  async editMessage(input: { messageId: string; userId: string; text: string }): Promise<ChatMessagePayload> {
+  async editMessage(userId: string, input: { messageId: string; text: string }): Promise<ChatMessagePayload> {
+    this.validateUuid(input.messageId, "MESSAGE_ID_INVALID");
     const text = this.validateText(input.text);
-    this.validateUuid(input.userId, "USER_ID_INVALID");
-    if (!(await this.chatRepository.sentByUser(input.messageId, input.userId)))
-      throw new Error("MESSAGE_ACCESS_DENIED");
-    const message = await this.chatRepository.editMessage({ messageId: input.messageId, text });
+    const message = await this.chatRepository.editMessage({ messageId: input.messageId, senderUserId: userId, text });
     if (!message) throw new Error("MESSAGE_NOT_FOUND");
     return rowToMessage(message);
   }
@@ -133,10 +137,9 @@ export class ChatService {
    * @param messageId 삭제할 메시지 ID
    * @returns 삭제 성공 여부
    */
-  async deleteMessage(messageId: string, userId: string): Promise<boolean> {
-    this.validateUuid(userId, "USER_ID_INVALID");
-    if (!(await this.chatRepository.sentByUser(messageId, userId))) throw new Error("MESSAGE_ACCESS_DENIED");
-    return Boolean(await this.chatRepository.deleteMessage(messageId));
+  async deleteMessage(userId: string, messageId: string): Promise<boolean> {
+    this.validateUuid(messageId, "MESSAGE_ID_INVALID");
+    return Boolean(await this.chatRepository.deleteMessage(messageId, userId));
   }
 
   /**
@@ -145,10 +148,10 @@ export class ChatService {
    * @param roomId 채팅방 ID
    * @returns 채팅방 존재 여부
    */
-  async markRoomRead(roomId: string, userId: string): Promise<boolean> {
+  async markRoomRead(userId: string, roomId: string): Promise<boolean> {
     this.validateUuid(roomId, "ROOM_ID_INVALID");
-    this.validateUuid(userId, "USER_ID_INVALID");
-    return this.chatRepository.markRoomRead({ roomId, userId });
+    await this.requireRoomMember(roomId, userId);
+    return true;
   }
 
   /**
@@ -157,8 +160,9 @@ export class ChatService {
    * @param input 채팅방 ID와 타이핑 여부
    * @returns 처리 성공 여부
    */
-  setTyping(input: { roomId: string; typing: boolean }): boolean {
+  async setTyping(userId: string, input: { roomId: string; typing: boolean }): Promise<boolean> {
     this.validateUuid(input.roomId, "ROOM_ID_INVALID");
+    await this.requireRoomMember(input.roomId, userId);
     return true;
   }
 
@@ -188,12 +192,8 @@ export class ChatService {
   async reportMessage(reporterUserId: string, messageId: string, reason: string): Promise<boolean> {
     this.validateUuid(reporterUserId, "USER_ID_INVALID");
     this.validateUuid(messageId, "MESSAGE_ID_INVALID");
-    const message = await this.chatRepository.findActiveMessage(messageId);
-    if (!message) throw new Error("MESSAGE_NOT_FOUND");
-    if (!(await this.chatRepository.hasRoomMember(message.roomId, reporterUserId))) {
-      throw new Error("ROOM_ACCESS_DENIED");
-    }
-    await this.chatRepository.reportMessage(reporterUserId, messageId, validateReportReason(reason));
+    const reported = await this.chatRepository.reportMessage(reporterUserId, messageId, validateReportReason(reason));
+    if (!reported) throw new Error("MESSAGE_NOT_FOUND_OR_FORBIDDEN");
     return true;
   }
 
@@ -237,6 +237,12 @@ export class ChatService {
     return text;
   }
 
+  private async requireRoomMember(roomId: string, userId: string): Promise<void> {
+    if (!(await this.chatRepository.isRoomMember(roomId, userId))) {
+      throw new CustomUnauthorizedException("채팅방에 접근할 수 없습니다.");
+    }
+  }
+
   /**
    * UUID 형식을 검증한다.
    *
@@ -244,7 +250,7 @@ export class ChatService {
    * @param error 실패 시 던질 에러 메시지
    */
   private validateUuid(input: string, error: string): void {
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input)) {
+    if (!UUID_PATTERN.test(input)) {
       throw new Error(error);
     }
   }
@@ -253,10 +259,20 @@ export class ChatService {
 type MessageRow = {
   id: string;
   roomId: string;
-  senderUserId: string | null;
   text: string;
   idempotencyKey: string | null;
   createdAt: Date;
+  deletedAt?: Date | null;
+};
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const validateIdempotencyKey = (input?: string | null): string | null => {
+  if (input == null) return null;
+  const key = input.trim();
+  if (!key) throw new Error("IDEMPOTENCY_KEY_INVALID");
+  if (key.length > IDEMPOTENCY_KEY_MAX_LENGTH) throw new Error("IDEMPOTENCY_KEY_TOO_LONG");
+  return key;
 };
 
 const validateReportReason = (input: string): string => {
@@ -275,7 +291,6 @@ const unavailable = (reason: string): AiSummaryPreviewPayload => ({
 const rowToMessage = (row: MessageRow): ChatMessagePayload => ({
   id: row.id,
   roomId: row.roomId,
-  senderUserId: row.senderUserId ?? undefined,
   text: row.text,
   idempotencyKey: row.idempotencyKey ?? undefined,
   createdAt: row.createdAt.toISOString(),

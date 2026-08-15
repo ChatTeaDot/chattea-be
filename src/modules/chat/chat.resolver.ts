@@ -47,7 +47,7 @@ export class ChatResolver {
   @UseGuards(JwtAccessTokenGuard)
   @Query(() => [ChatMessagePayload])
   chatMessages(@Context("req") req: AuthRequest, @Args("input") input: ChatMessagesInput) {
-    return this.chatService.messages({ ...input, userId: req.user.userId });
+    return this.chatService.messages(req.user.userId, input);
   }
 
   /**
@@ -59,7 +59,7 @@ export class ChatResolver {
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => ChatMessagePayload)
   sendChatMessage(@Context("req") req: AuthRequest, @Args("input") input: SendChatMessageInput) {
-    return this.chatService.sendMessage({ ...input, senderUserId: req.user.userId });
+    return this.chatService.sendMessage(req.user.userId, input);
   }
 
   /**
@@ -71,7 +71,7 @@ export class ChatResolver {
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => ChatMessagePayload)
   editChatMessage(@Context("req") req: AuthRequest, @Args("input") input: EditChatMessageInput) {
-    return this.chatService.editMessage({ ...input, userId: req.user.userId });
+    return this.chatService.editMessage(req.user.userId, input);
   }
 
   /**
@@ -83,7 +83,7 @@ export class ChatResolver {
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => Boolean)
   deleteChatMessage(@Context("req") req: AuthRequest, @Args("messageId") messageId: string) {
-    return this.chatService.deleteMessage(messageId, req.user.userId);
+    return this.chatService.deleteMessage(req.user.userId, messageId);
   }
 
   /**
@@ -95,7 +95,7 @@ export class ChatResolver {
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => Boolean)
   markChatRoomRead(@Context("req") req: AuthRequest, @Args("input") input: MarkRoomReadInput) {
-    return this.chatService.markRoomRead(input.roomId, req.user.userId);
+    return this.chatService.markRoomRead(req.user.userId, input.roomId);
   }
 
   /**
@@ -106,8 +106,8 @@ export class ChatResolver {
    */
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => Boolean)
-  setChatTyping(@Args("input") input: SetTypingInput) {
-    return this.chatService.setTyping(input);
+  setChatTyping(@Context("req") req: AuthRequest, @Args("input") input: SetTypingInput) {
+    return this.chatService.setTyping(req.user.userId, input);
   }
 
   /**

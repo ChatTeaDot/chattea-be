@@ -41,7 +41,7 @@ export class ChatMessagesInput {
   @Field()
   roomId!: string;
 
-  @Field({ nullable: true })
+  @Field(() => Int, { nullable: true })
   first?: number;
 
   @Field({ nullable: true })

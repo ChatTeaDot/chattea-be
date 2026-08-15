@@ -1,5 +1,5 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, count, desc, eq, gt, isNull, ne, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
 import { Database, DRIZZLE } from "src/modules/database/database.module";
 import {
   matches,
@@ -39,22 +39,22 @@ export class ChatRepository {
         ),
       )
       .where(or(eq(matches.userLowId, userId), eq(matches.userHighId, userId)))
-      .orderBy(desc(rooms.updatedAt));
+      .orderBy(desc(rooms.updatedAt), desc(rooms.id));
 
     return Promise.all(
       rows.map(async (room) => {
         const lastMessage = await this.db.query.messages.findFirst({
           columns: { text: true },
           where: and(eq(messages.roomId, room.id), isNull(messages.deletedAt)),
-          orderBy: desc(messages.createdAt),
+          orderBy: [desc(messages.createdAt), desc(messages.id)],
         });
 
-        const unread = await this.unreadMessageCount(room.id, userId);
+        const unreadCount = await this.unreadMessageCount(room.id, userId);
         return {
           id: room.id,
           name: room.name,
           lastMessage: lastMessage?.text ?? null,
-          unreadCount: Number(unread),
+          unreadCount: Number(unreadCount),
           updatedAt: room.updatedAt,
         };
       }),
@@ -67,11 +67,27 @@ export class ChatRepository {
    * @param messageId 커서로 사용할 메시지 ID
    * @returns 메시지 생성 시각 또는 undefined
    */
-  async findMessageCursor(messageId: string) {
+  async findMessageCursor(messageId: string, roomId: string) {
     return this.db.query.messages.findFirst({
-      columns: { createdAt: true },
-      where: eq(messages.id, messageId),
+      columns: { id: true },
+      where: and(eq(messages.id, messageId), eq(messages.roomId, roomId), isNull(messages.deletedAt)),
     });
+  }
+
+  async isRoomMember(roomId: string, userId: string): Promise<boolean> {
+    const member = await this.db.query.roomMembers.findFirst({
+      columns: { roomId: true },
+      where: and(eq(roomMembers.roomId, roomId), eq(roomMembers.userId, userId)),
+    });
+    return Boolean(member);
+  }
+
+  async otherRoomMemberIds(roomId: string, userId: string): Promise<string[]> {
+    const members = await this.db.query.roomMembers.findMany({
+      columns: { userId: true },
+      where: and(eq(roomMembers.roomId, roomId), sql`${roomMembers.userId} <> ${userId}`),
+    });
+    return members.map((member) => member.userId);
   }
 
   /**
@@ -80,9 +96,19 @@ export class ChatRepository {
    * @param input 채팅방 ID, 조회 개수, 커서 시각
    * @returns 메시지 목록
    */
-  async messages(input: { roomId: string; limit: number; after?: Date | null; viewerUserId: string }) {
+  async messages(input: { roomId: string; limit: number; after?: string | null }) {
     const where = input.after
-      ? and(eq(messages.roomId, input.roomId), isNull(messages.deletedAt), gt(messages.createdAt, input.after))
+      ? and(
+          eq(messages.roomId, input.roomId),
+          isNull(messages.deletedAt),
+          sql<boolean>`(${messages.createdAt}, ${messages.id}) > (
+            SELECT cursor."createdAt", cursor.id
+            FROM ${messages} AS cursor
+            WHERE cursor.id = ${input.after}
+              AND cursor."roomId" = ${input.roomId}
+              AND cursor."deletedAt" IS NULL
+          )`,
+        )
       : and(eq(messages.roomId, input.roomId), isNull(messages.deletedAt));
 
     return this.db
@@ -96,24 +122,18 @@ export class ChatRepository {
       })
       .from(messages)
       .where(where)
-      .orderBy(messages.createdAt)
+      .orderBy(messages.createdAt, messages.id)
       .limit(input.limit);
   }
 
-  async hasRoomMember(roomId: string, userId: string): Promise<boolean> {
-    const membership = await this.db.query.roomMembers.findFirst({
-      columns: { roomId: true },
-      where: and(eq(roomMembers.roomId, roomId), eq(roomMembers.userId, userId)),
-    });
-    return Boolean(membership);
-  }
-
-  async otherRoomMemberIds(roomId: string, userId: string): Promise<string[]> {
-    const members = await this.db.query.roomMembers.findMany({
-      columns: { userId: true },
-      where: and(eq(roomMembers.roomId, roomId), ne(roomMembers.userId, userId)),
-    });
-    return members.map((member) => member.userId);
+  /**
+   * 채팅방이 없으면 기본 이름으로 생성한다.
+   *
+   * @param roomId 채팅방 ID
+   * @returns 저장 완료 Promise
+   */
+  async ensureRoom(roomId: string) {
+    await this.db.insert(rooms).values({ id: roomId, name: "대화" }).onConflictDoNothing();
   }
 
   /**
@@ -122,16 +142,13 @@ export class ChatRepository {
    * @param idempotencyKey 중복 전송 방지 키
    * @returns 기존 메시지 또는 undefined
    */
-  async findMessageByIdempotencyKey(idempotencyKey: string) {
+  async findMessageByIdempotencyKey(idempotencyKey: string, roomId: string, senderUserId: string) {
     return this.db.query.messages.findFirst({
-      where: eq(messages.idempotencyKey, idempotencyKey),
-    });
-  }
-
-  async findActiveMessage(messageId: string) {
-    return this.db.query.messages.findFirst({
-      columns: { id: true, roomId: true },
-      where: and(eq(messages.id, messageId), isNull(messages.deletedAt)),
+      where: and(
+        eq(messages.idempotencyKey, idempotencyKey),
+        eq(messages.roomId, roomId),
+        eq(messages.senderUserId, senderUserId),
+      ),
     });
   }
 
@@ -165,7 +182,12 @@ export class ChatRepository {
         text: input.text,
         idempotencyKey: input.idempotencyKey,
       })
+      .onConflictDoNothing({ target: [messages.roomId, messages.senderUserId, messages.idempotencyKey] })
       .returning();
+
+    if (!message && input.idempotencyKey) {
+      return this.findMessageByIdempotencyKey(input.idempotencyKey, input.roomId, input.senderUserId);
+    }
 
     await this.touchRoom(input.roomId);
     return message;
@@ -177,11 +199,17 @@ export class ChatRepository {
    * @param input 수정할 메시지 ID와 본문
    * @returns 수정된 메시지 또는 undefined
    */
-  async editMessage(input: { messageId: string; text: string }) {
+  async editMessage(input: { messageId: string; senderUserId: string; text: string }) {
     const [message] = await this.db
       .update(messages)
       .set({ text: input.text, updatedAt: new Date() })
-      .where(and(eq(messages.id, input.messageId), isNull(messages.deletedAt)))
+      .where(
+        and(
+          eq(messages.id, input.messageId),
+          eq(messages.senderUserId, input.senderUserId),
+          isNull(messages.deletedAt),
+        ),
+      )
       .returning();
 
     if (message) await this.touchRoom(message.roomId);
@@ -194,11 +222,11 @@ export class ChatRepository {
    * @param messageId 삭제할 메시지 ID
    * @returns 삭제된 메시지 또는 undefined
    */
-  async deleteMessage(messageId: string) {
+  async deleteMessage(messageId: string, senderUserId: string) {
     const [message] = await this.db
       .update(messages)
       .set({ deletedAt: new Date(), updatedAt: new Date() })
-      .where(and(eq(messages.id, messageId), isNull(messages.deletedAt)))
+      .where(and(eq(messages.id, messageId), eq(messages.senderUserId, senderUserId), isNull(messages.deletedAt)))
       .returning();
 
     return message;
@@ -212,56 +240,6 @@ export class ChatRepository {
    */
   async findRoom(roomId: string) {
     return this.db.query.rooms.findFirst({ where: eq(rooms.id, roomId) });
-  }
-
-  async markRoomRead(input: { roomId: string; userId: string }): Promise<boolean> {
-    return this.db.transaction(async (tx) => {
-      const member = await tx.query.roomMembers.findFirst({
-        columns: { roomId: true },
-        where: and(eq(roomMembers.roomId, input.roomId), eq(roomMembers.userId, input.userId)),
-      });
-      if (!member) return false;
-      const lastMessage = await tx.query.messages.findFirst({
-        columns: { id: true },
-        where: and(eq(messages.roomId, input.roomId), isNull(messages.deletedAt)),
-        orderBy: desc(messages.createdAt),
-      });
-      await tx
-        .insert(readReceipts)
-        .values({ roomId: input.roomId, userId: input.userId, lastReadMessageId: lastMessage?.id, readAt: new Date() })
-        .onConflictDoUpdate({
-          target: [readReceipts.roomId, readReceipts.userId],
-          set: { lastReadMessageId: lastMessage?.id, readAt: new Date() },
-        });
-      return true;
-    });
-  }
-
-  async sentByUser(messageId: string, userId: string): Promise<boolean> {
-    const message = await this.db.query.messages.findFirst({
-      columns: { id: true },
-      where: and(eq(messages.id, messageId), eq(messages.senderUserId, userId), isNull(messages.deletedAt)),
-    });
-    return Boolean(message);
-  }
-
-  private async unreadMessageCount(roomId: string, userId: string): Promise<number | string> {
-    const receipt = await this.db.query.readReceipts.findFirst({
-      columns: { readAt: true },
-      where: and(eq(readReceipts.roomId, roomId), eq(readReceipts.userId, userId)),
-    });
-    const [row] = await this.db
-      .select({ count: count() })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.roomId, roomId),
-          ne(messages.senderUserId, userId),
-          isNull(messages.deletedAt),
-          receipt ? gt(messages.createdAt, receipt.readAt) : undefined,
-        ),
-      );
-    return row?.count ?? 0;
   }
 
   /**
@@ -283,17 +261,42 @@ export class ChatRepository {
    * @param reason 신고 사유
    * @returns 저장 완료 Promise
    */
-  async reportMessage(reporterUserId: string, messageId: string, reason: string) {
-    await this.db
-      .insert(messageReports)
-      .values({ messageId, reporterUserId, reason })
-      .onConflictDoUpdate({
-        target: [messageReports.messageId, messageReports.reporterUserId],
-        set: { reason, createdAt: new Date() },
-      });
+  async reportMessage(reporterUserId: string, messageId: string, reason: string): Promise<boolean> {
+    const rows = await this.db.execute(sql`
+      INSERT INTO ${messageReports} ("messageId", "reporterUserId", reason)
+      SELECT ${messages.id}, ${reporterUserId}, ${reason}
+      FROM ${messages}
+      INNER JOIN ${roomMembers}
+        ON ${roomMembers.roomId} = ${messages.roomId}
+       AND ${roomMembers.userId} = ${reporterUserId}
+      WHERE ${messages.id} = ${messageId} AND ${messages.deletedAt} IS NULL
+      ON CONFLICT ("messageId", "reporterUserId") DO UPDATE
+        SET reason = EXCLUDED.reason, "createdAt" = now()
+      RETURNING id
+    `);
+    return rows.rowCount === 1;
   }
 
   private async touchRoom(roomId: string) {
     await this.db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, roomId));
+  }
+
+  private async unreadMessageCount(roomId: string, userId: string): Promise<number | string> {
+    const receipt = await this.db.query.readReceipts.findFirst({
+      columns: { readAt: true },
+      where: and(eq(readReceipts.roomId, roomId), eq(readReceipts.userId, userId)),
+    });
+    const [row] = await this.db
+      .select({ count: count() })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.roomId, roomId),
+          sql`${messages.senderUserId} <> ${userId}`,
+          isNull(messages.deletedAt),
+          receipt ? gt(messages.createdAt, receipt.readAt) : undefined,
+        ),
+      );
+    return row?.count ?? 0;
   }
 }
