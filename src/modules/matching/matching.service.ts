@@ -1,13 +1,7 @@
-import { Injectable, Optional } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { NotificationService } from "src/modules/notification/notification.service";
 import { UserRepository } from "src/modules/user/user.repository";
-import {
-  BoostPayload,
-  LikeUserPayload,
-  MatchCandidatePayload,
-  ScoreSummaryPayload,
-  UndoMatchActionPayload,
-} from "./matching.types";
+import { BoostPayload, LikeUserPayload, MatchCandidatePayload, UndoMatchActionPayload } from "./matching.types";
 import { MatchingRepository } from "./matching.repository";
 
 const DAILY_LIKE_LIMITS_BY_PLAN: Record<string, number | null> = {
@@ -18,9 +12,12 @@ const DAILY_LIKE_LIMITS_BY_PLAN: Record<string, number | null> = {
 };
 const LIKED_ME_LIMITS_BY_PLAN: Record<string, number | null> = { free: null, basic: 3, gold: 10, black: null };
 const LIKED_ME_WINDOW_HOURS = 3;
+const LIKED_ME_MAX_PAGE_SIZE = 50;
 
 @Injectable()
 export class MatchingService {
+  private readonly logger = new Logger(MatchingService.name);
+
   constructor(
     private readonly matchingRepository: MatchingRepository,
     private readonly userRepository: UserRepository,
@@ -33,11 +30,6 @@ export class MatchingService {
     return (await this.matchingRepository.candidates(userId)).map(rowToCandidate);
   }
 
-  async blackCandidates(userId: string): Promise<MatchCandidatePayload[]> {
-    if ((await this.currentPlanId(userId)) !== "black") return [];
-    return (await this.candidates(userId)).filter((candidate) => candidate.blackRecommended);
-  }
-
   async likedMeCandidates(userId: string, now = new Date()): Promise<MatchCandidatePayload[]> {
     validateUuid(userId);
     await this.requireCompletedProfile(userId);
@@ -45,8 +37,8 @@ export class MatchingService {
     if (viewerPlanId === "free") throw new Error("LIKED_ME_NOT_AVAILABLE");
     await this.enforceLikedMeWindow(userId, viewerPlanId, now);
     const limit = getLikedMeLimit(viewerPlanId);
-    const result = await this.matchingRepository.likedMeCandidates(userId);
-    return (limit === null ? result : result.slice(0, limit)).map(rowToCandidate);
+    const result = await this.matchingRepository.likedMeCandidates(userId, limit ?? LIKED_ME_MAX_PAGE_SIZE);
+    return result.map(rowToCandidate);
   }
 
   async likeUser(userId: string, likedUserId: string, now = new Date()): Promise<LikeUserPayload> {
@@ -76,21 +68,6 @@ export class MatchingService {
     return { activeUntil: boost.endsAt.toISOString(), remainingBoostCredits: boost.remainingBoostCredits };
   }
 
-  async rateScore(scorerUserId: string, scoredUserId: string, score: number): Promise<ScoreSummaryPayload> {
-    validateUuid(scorerUserId);
-    validateUuid(scoredUserId);
-    if (scorerUserId === scoredUserId) throw new Error("SCORE_SELF_NOT_ALLOWED");
-    if (!Number.isInteger(score) || score < 1 || score > 5) throw new Error("SCORE_INVALID");
-    await this.matchingRepository.upsertScore({ scorerUserId, scoredUserId, score });
-    return this.scoreSummary(scoredUserId);
-  }
-
-  async scoreSummary(userId: string): Promise<ScoreSummaryPayload> {
-    validateUuid(userId);
-    const result = await this.matchingRepository.scoreSummary(userId);
-    return { userId, averageScore: Number(result?.averageScore ?? 0), scoreCount: Number(result?.scoreCount ?? 0) };
-  }
-
   private async actOnCandidate(
     userId: string,
     targetUserId: string,
@@ -107,12 +84,22 @@ export class MatchingService {
       targetUserId,
       action,
       dailyLimit: getDailyLikeLimit(planId),
+      now,
       dayStart: startOfUtcDay(now),
       dayEnd: nextUtcDay(now),
     });
 
-    if (action !== "skip") {
-      await this.notifyInteraction({ userId, targetUserId, matched: result.matched, roomId: result.roomId });
+    if (result.created && action !== "skip") {
+      try {
+        await this.notifyInteraction({ userId, targetUserId, matched: result.matched, roomId: result.roomId });
+      } catch (error) {
+        this.logger.warn(
+          JSON.stringify({
+            event: "matching_notification_failed",
+            error: error instanceof Error ? error.message : "unknown",
+          }),
+        );
+      }
     }
     return { matched: result.matched, roomId: result.roomId, undoAvailable: !result.matched };
   }
@@ -158,10 +145,9 @@ export class MatchingService {
     const limit = getLikedMeLimit(viewerPlanId);
     if (limit === null) return;
     const periodStart = startOfLikedMeWindow(now);
-    const current = await this.matchingRepository.findLikedMeAccess(userId, periodStart);
-    const next = (current?.viewedCount ?? 0) + 1;
-    if (next > limit) throw new Error("LIKED_ME_LIMIT_REACHED");
-    await this.matchingRepository.createLikedMeAccess({ userId, periodStart, viewedCount: next });
+    if (!(await this.matchingRepository.consumeLikedMeAccess({ userId, periodStart, limit }))) {
+      throw new Error("LIKED_ME_LIMIT_REACHED");
+    }
   }
 
   private async currentPlanId(userId: string): Promise<string> {
@@ -187,10 +173,14 @@ const validateUuid = (input: string): void => {
     throw new Error("USER_ID_INVALID");
   }
 };
-const getDailyLikeLimit = (planId: string): number | null =>
-  DAILY_LIKE_LIMITS_BY_PLAN[planId] ?? DAILY_LIKE_LIMITS_BY_PLAN.free;
-const getLikedMeLimit = (planId: string): number | null =>
-  LIKED_ME_LIMITS_BY_PLAN[planId] ?? LIKED_ME_LIMITS_BY_PLAN.basic;
+const getDailyLikeLimit = (planId: string): number | null => {
+  const limit = DAILY_LIKE_LIMITS_BY_PLAN[planId];
+  return limit === undefined ? 10 : limit;
+};
+const getLikedMeLimit = (planId: string): number | null => {
+  const limit = LIKED_ME_LIMITS_BY_PLAN[planId];
+  return limit === undefined ? 3 : limit;
+};
 const startOfUtcDay = (now: Date): Date =>
   new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 const nextUtcDay = (now: Date): Date =>

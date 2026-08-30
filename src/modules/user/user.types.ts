@@ -1,34 +1,8 @@
-import { Field, InputType, Int, ObjectType } from "@nestjs/graphql";
-
-@InputType()
-export class UpdateEmailInput {
-  @Field()
-  email!: string;
-
-  @Field()
-  phoneVerificationToken!: string;
-}
-
-export type UpdateEmailRepositoryInput = UpdateEmailInput & {
-  userId: string;
-};
-
-@InputType()
-export class UpdatePasswordInput {
-  @Field()
-  password!: string;
-
-  @Field()
-  phoneVerificationToken!: string;
-}
-
-export type UpdatePasswordRepositoryInput = UpdatePasswordInput & {
-  userId: string;
-};
+import { Field, ID, InputType, Int, ObjectType } from "@nestjs/graphql";
 
 @ObjectType()
 export class ProfilePhotoPayload {
-  @Field()
+  @Field(() => ID)
   id!: string;
 
   @Field()
@@ -55,8 +29,8 @@ export class UpdateUserProfileInput {
   @Field()
   intro!: string;
 
-  @Field(() => [String])
-  photoUrls!: string[];
+  @Field(() => [ID])
+  photoUploadIds!: string[];
 }
 
 @ObjectType()

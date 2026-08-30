@@ -1,26 +1,24 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
-import * as bcrypt from "bcrypt";
-import {
-  CustomBadRequestException,
-  CustomNotFoundException,
-  CustomUnauthorizedException,
-} from "src/common/errors/custom-exceptions";
+import { Injectable } from "@nestjs/common";
+import { CustomBadRequestException, CustomNotFoundException } from "src/common/errors/custom-exceptions";
 import { isInterestedGender } from "src/modules/database/schema";
+import { validate as isUuid } from "uuid";
 import { UserErrorMessage } from "./user.error";
 import { UserRepository } from "./user.repository";
-import {
-  AccountDeletionPayload,
-  CurrentSubscriptionPayload,
-  UpdateEmailRepositoryInput,
-  UpdatePasswordRepositoryInput,
-  UpdateUserProfileInput,
-} from "./user.types";
+import { AccountDeletionPayload, CurrentSubscriptionPayload, UpdateUserProfileInput } from "./user.types";
 
 const PROFILE_INTRO_MAX_LENGTH = 60;
 const PROFILE_PHOTO_MIN_COUNT = 1;
 const PROFILE_PHOTO_MAX_COUNT = 3;
 const DELETION_GRACE_DAYS = 14;
-const DELETION_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const DELETION_LEASE_MS = 5 * 60 * 1000;
+
+export type AccountDeletionBatchResult = Readonly<{
+  claimed: number;
+  succeeded: number;
+  retryScheduled: number;
+  permanentlyFailed: number;
+  hasMore: boolean;
+}>;
 
 export const KOREAN_REGIONS = [
   "서울",
@@ -43,93 +41,78 @@ export const KOREAN_REGIONS = [
 ] as const;
 
 @Injectable()
-export class UserService implements OnModuleInit, OnModuleDestroy {
-  private cleanupTimer?: NodeJS.Timeout;
-
+export class UserService {
   constructor(private readonly userRepository: UserRepository) {}
 
-  onModuleInit(): void {
-    this.cleanupTimer = setInterval(() => {
-      void this.cleanupDueDeletedAccounts().catch(() => undefined);
-    }, DELETION_CLEANUP_INTERVAL_MS);
-    this.cleanupTimer.unref();
-  }
-
-  onModuleDestroy(): void {
-    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
-  }
-
-  async findUser(userId: string) {
+  findUser = async (userId: string) => {
     const user = await this.userRepository.findUser(userId);
     if (!user) throw new CustomNotFoundException(UserErrorMessage.InvalidUserId);
     return user;
-  }
+  };
 
-  async profile(userId: string) {
+  profile = async (userId: string) => {
     validateUuid(userId);
     const user = await this.userRepository.findUserProfile(userId);
     if (!user) throw new CustomNotFoundException(UserErrorMessage.InvalidUserId);
     return user;
-  }
+  };
 
-  async currentSubscription(userId: string): Promise<CurrentSubscriptionPayload> {
+  currentSubscription = async (userId: string): Promise<CurrentSubscriptionPayload> => {
     validateUuid(userId);
     return { planId: (await this.userRepository.findCurrentSubscription(userId))?.planId ?? "free" };
-  }
+  };
 
-  async updateEmail(input: UpdateEmailRepositoryInput) {
-    await this.assertVerifiedPhoneToken(input.userId, input.phoneVerificationToken);
-    return this.userRepository.updateEmail(input);
-  }
-
-  async updatePassword(input: UpdatePasswordRepositoryInput) {
-    await this.assertVerifiedPhoneToken(input.userId, input.phoneVerificationToken);
-    const password = await bcrypt.hash(input.password, 10);
-    return this.userRepository.updatePassword({ ...input, password });
-  }
-
-  async updateProfile(userId: string, input: UpdateUserProfileInput) {
+  updateProfile = async (userId: string, input: UpdateUserProfileInput) => {
     validateUuid(userId);
     await this.findUser(userId);
     const profile = validateProfileInput(input);
     return this.userRepository.replaceProfile({ userId, ...profile });
-  }
+  };
 
-  async beginAccountDeletion(userId: string, now = new Date()): Promise<AccountDeletionPayload> {
+  beginAccountDeletion = async (userId: string, now = new Date()): Promise<AccountDeletionPayload> => {
     validateUuid(userId);
     await this.findUser(userId);
     const scheduledFor = new Date(now);
     scheduledFor.setUTCDate(scheduledFor.getUTCDate() + DELETION_GRACE_DAYS);
-    await this.userRepository.scheduleDeletion(userId, scheduledFor);
-    return { hidden: true, scheduledFor: scheduledFor.toISOString() };
-  }
+    const deadline = await this.userRepository.scheduleDeletion(userId, scheduledFor);
+    return { hidden: true, scheduledFor: deadline.toISOString() };
+  };
 
-  async restoreIfWithinGrace(userId: string): Promise<boolean> {
+  restoreIfWithinGrace = async (userId: string): Promise<boolean> => {
     validateUuid(userId);
     return this.userRepository.restoreScheduledDeletion(userId);
-  }
+  };
 
-  async cleanupDueDeletedAccounts(now = new Date()): Promise<number> {
-    const users = await this.userRepository.findDueDeletionUserIds(now);
-    await Promise.all(users.map(({ userId }) => this.userRepository.anonymizeDeletedAccount(userId)));
-    return users.length;
-  }
-
-  private async assertVerifiedPhoneToken(userId: string, phoneVerificationToken: string) {
-    const [user, token] = await Promise.all([
-      this.userRepository.findUser(userId),
-      this.userRepository.findPhoneVerificationToken(phoneVerificationToken),
-    ]);
-    if (!token || token.expiresAt.getTime() <= Date.now()) {
-      throw new CustomUnauthorizedException(UserErrorMessage.InvalidPhoneVerificationToken);
-    }
-    if (!user?.phone || user.phone !== token.phoneE164) {
-      throw new CustomUnauthorizedException(UserErrorMessage.PhoneVerificationRequired);
-    }
-    if (!(await this.userRepository.consumePhoneVerificationToken(phoneVerificationToken))) {
-      throw new CustomUnauthorizedException(UserErrorMessage.InvalidPhoneVerificationToken);
-    }
-  }
+  processDueAccountDeletionBatch = async (input: { now: Date; limit: number }): Promise<AccountDeletionBatchResult> => {
+    const limit = validateBatchLimit(input.limit);
+    const claimed = await this.userRepository.claimDueDeletionBatch({
+      now: input.now,
+      limit,
+      leaseExpiresAt: new Date(input.now.getTime() + DELETION_LEASE_MS),
+    });
+    const settledOutcomes = await Promise.allSettled(
+      claimed.jobs.map(async (job) => {
+        try {
+          await this.userRepository.anonymizeDeletedAccount({ ...job, now: input.now });
+          return "succeeded" as const;
+        } catch {
+          await this.userRepository.releaseDeletionLease({ ...job, now: input.now });
+          return "retry" as const;
+        }
+      }),
+    );
+    const outcomes = settledOutcomes.map((outcome) => {
+      if (outcome.status === "rejected") throw outcome.reason;
+      return outcome.value;
+    });
+    return {
+      claimed: outcomes.length,
+      succeeded: outcomes.filter((outcome) => outcome === "succeeded").length,
+      retryScheduled: outcomes.filter((outcome) => outcome === "retry").length,
+      permanentlyFailed: 0,
+      hasMore: claimed.hasMore,
+    };
+  };
 }
 
 const validateProfileInput = (input: UpdateUserProfileInput) => {
@@ -145,15 +128,17 @@ const validateProfileInput = (input: UpdateUserProfileInput) => {
   if (!isInterestedGender(interestedGender)) {
     throw new CustomBadRequestException("PROFILE_INTERESTED_GENDER_INVALID");
   }
-  const photoUrls = input.photoUrls.map((url) => url.trim()).filter(Boolean);
-  if (photoUrls.length < PROFILE_PHOTO_MIN_COUNT || photoUrls.length > PROFILE_PHOTO_MAX_COUNT) {
+  const photoUploadIds = input.photoUploadIds.map((id) => id.trim());
+  if (photoUploadIds.length < PROFILE_PHOTO_MIN_COUNT || photoUploadIds.length > PROFILE_PHOTO_MAX_COUNT) {
     throw new CustomBadRequestException("PROFILE_PHOTO_COUNT_INVALID");
   }
-  if (new Set(photoUrls).size !== photoUrls.length || photoUrls.some((url) => !isHttpUrl(url))) {
-    throw new CustomBadRequestException("PROFILE_PHOTO_URL_INVALID");
+  if (
+    new Set(photoUploadIds).size !== photoUploadIds.length ||
+    photoUploadIds.some((id, index) => !isUuid(id) || id !== input.photoUploadIds[index])
+  ) {
+    throw new CustomBadRequestException("PROFILE_PHOTO_UPLOAD_INVALID");
   }
-
-  return { userName, birthDate, region, interestedGender, intro, photoUrls };
+  return { userName, birthDate, region, interestedGender, intro, photoUploadIds };
 };
 
 const validateRequiredText = (input: string, maxLength: number, field: string): string => {
@@ -179,13 +164,11 @@ const validateBirthDate = (input: string): string => {
   return input;
 };
 
-const isHttpUrl = (input: string): boolean => {
-  try {
-    const url = new URL(input);
-    return url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost");
-  } catch {
-    return false;
+const validateBatchLimit = (limit: number): number => {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("ACCOUNT_DELETION_BATCH_LIMIT_INVALID");
   }
+  return limit;
 };
 
 const validateUuid = (input: string): void => {

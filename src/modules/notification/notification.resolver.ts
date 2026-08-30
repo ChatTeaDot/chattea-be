@@ -2,6 +2,7 @@ import { UseGuards } from "@nestjs/common";
 import { Args, Context, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
+import { deviceIdFromRequest } from "src/modules/auth/device-id";
 import { NotificationService } from "./notification.service";
 import { NotificationPayload, RegisterPushTokenInput } from "./notification.types";
 
@@ -24,6 +25,12 @@ export class NotificationResolver {
   @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => Boolean)
   registerPushToken(@Context("req") req: AuthRequest, @Args("input") input: RegisterPushTokenInput) {
-    return this.notificationService.registerPushToken(req.user.userId, input);
+    return this.notificationService.registerPushToken(req.user.userId, deviceIdFromRequest(req), input);
+  }
+
+  @UseGuards(JwtAccessTokenGuard)
+  @Mutation(() => Boolean)
+  unregisterPushToken(@Context("req") req: AuthRequest) {
+    return this.notificationService.unregisterPushToken(req.user.userId, deviceIdFromRequest(req));
   }
 }

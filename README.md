@@ -1,153 +1,142 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="200" alt="Nest Logo" /></a>
-</p>
+# ChatTea backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+NestJS 11, GraphQL, Drizzle ORM, and PostgreSQL backend for ChatTea.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://coveralls.io/github/nestjs/nest?branch=master" target="_blank"><img src="https://coveralls.io/repos/github/nestjs/nest/badge.svg?branch=master#9" alt="Coverage" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Requirements
 
-## Description
+- Node.js 24
+- pnpm 10.13.1
+- PostgreSQL 17
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Installation
+## Local development
 
 ```bash
-$ npm install
+pnpm install --frozen-lockfile
+cp .env.example .env
+pnpm db:up
+pnpm migrate
+pnpm start:dev
 ```
 
-## Migrations
+`.env.example` targets the host process and Compose PostgreSQL port `5433`. `pnpm docker:up` instead adds `docker-compose.dev.yml` and starts the entire local stack with `NODE_ENV=development`. The production compose file hardcodes `NODE_ENV=production`, validates every required setting, and has no bypass switch.
 
-Start local Postgres with Docker:
+## Verification
 
 ```bash
-$ pnpm db:up
+pnpm config:check
+pnpm audit:all
+pnpm lint:check
+pnpm format:check
+pnpm test --runInBand
+pnpm typecheck
+pnpm build
+pnpm test:e2e --runInBand
 ```
 
-Run database migrations during deploy, before starting the new app version. CI/CD or the release operator should run this once per deploy:
+PostgreSQL-backed tests use these local defaults:
 
 ```bash
-$ pnpm migrate
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5433
+POSTGRES_USERNAME=chattea
+POSTGRES_PASSWORD=chattea-dev
+POSTGRES_DATABASE=chattea
 ```
 
-The runner applies `migrations/*.sql` in filename order and records checksums in `_migrations`. If an applied SQL file changes, deploy fails instead of re-running it.
+`pnpm test:e2e` loads `.env` and fails instead of silently skipping the PostgreSQL suites when the database settings are absent.
 
-Set `POSTGRES_SSL=true` for managed Postgres providers that require SSL.
+## Production configuration
 
-## Native app services
+Production startup fails closed unless all of these settings are present:
 
-Profile photos require a real public R2 origin. Configure all of the following before enabling uploads:
+```text
+POSTGRES_HOST
+POSTGRES_PORT
+POSTGRES_USERNAME
+POSTGRES_PASSWORD
+POSTGRES_DATABASE
+POSTGRES_SSL
+JWT_ACCESS_TOKEN_SECRET
+JWT_REFRESH_TOKEN_SECRET
+JWT_ACCESS_TOKEN_EXP
+JWT_REFRESH_TOKEN_EXP
+SIGNUP_TOKEN_SECRET
+KAKAO_SIGNUP_TOKEN_SECRET
+KAKAO_CLIENT_ID
+KAKAO_CALLBACK_URL
+PHONE_CODE_PEPPER
+SMS_PROVIDER_URL
+SMS_PROVIDER_AUTHORIZATION
+SMS_SENDER_ID
+R2_ACCOUNT_ID
+R2_ACCESS_KEY_ID
+R2_SECRET_ACCESS_KEY
+R2_BUCKET
+R2_PUBLIC_BASE_URL
+REVENUECAT_WEBHOOK_SECRET
+REVENUECAT_IOS_APP_ID
+REVENUECAT_ANDROID_APP_ID
+CLIENT_URL
+TRUST_PROXY
+```
+
+`KAKAO_CALLBACK_URL`, `SMS_PROVIDER_URL`, `R2_PUBLIC_BASE_URL`, and `CLIENT_URL` must be credential-free HTTPS URLs. Secrets must be at least 16 characters and must not use development or test prefixes. Set `TRUST_PROXY` to the exact trusted proxy address or range, never `true` or `*`.
+
+Expo push delivery is optional. Set `EXPO_PUSH_ENABLED=true` and, when required, `EXPO_PUSH_ACCESS_TOKEN`. In-app notifications remain persisted when push delivery is disabled.
+
+## Profile uploads
+
+Profile images use a verified four-step flow:
+
+1. Call `createUpload` with `filename`, `contentType`, and `sizeBytes`. It returns `id`, `putUrl`, and `expiresAt`; it does not return a public URL.
+2. Before expiry, `PUT` exactly `sizeBytes` bytes to `putUrl` with the declared content type.
+3. Call `finalizeUpload(uploadId: id)`. The server verifies ownership, object size, MIME metadata, and decoded image limits, then re-encodes the final object and returns its trusted `publicUrl` and metadata.
+4. Send the ordered verified IDs through `UpdateUserProfileInput.photoUploadIds`. Raw URLs are never accepted as profile-photo authority.
+
+For backward compatibility, an existing photo already attached to the authenticated user's profile may be retained by sending the photo `id` returned by `me` in `photoUploadIds`. This compatibility applies only to that user's attached legacy rows without an upload ID; it does not authorize arbitrary UUIDs or URLs. New photos must complete the create, PUT, and finalize flow.
+
+## RevenueCat webhooks
+
+RevenueCat sends events to `POST /webhooks/revenuecat`. Sign the exact raw request body with HMAC-SHA256 and send the official header format:
+
+```text
+X-RevenueCat-Webhook-Signature: t=<unix-seconds>,v1=<hex-digest>
+```
+
+The server rejects malformed signatures, non-constant-time mismatches, and timestamps outside the five-minute tolerance. In production, mutation events must also be `PRODUCTION` events whose store-specific public app identifier matches either `REVENUECAT_IOS_APP_ID` or `REVENUECAT_ANDROID_APP_ID`; both distinct identifiers are required. Non-production environments accept sandbox events for testing. Event IDs provide idempotency, and implemented subscription or consumable updates are committed transactionally. Google Play subscription products accept RevenueCat's `<subscription_id>:<base_plan_id>` form.
+
+Do not enable `TRANSFER`, `TEMPORARY_ENTITLEMENT_GRANT`, or `VIRTUAL_CURRENCY_TRANSACTION` in the RevenueCat webhook until their entitlement models are implemented; the endpoint returns `501` instead of falsely acknowledging those state changes.
+
+## Migrations and deploys
+
+Run migrations before starting the new application version:
 
 ```bash
-R2_ACCOUNT_ID=
-R2_ACCESS_KEY_ID=
-R2_SECRET_ACCESS_KEY=
-R2_BUCKET=
-R2_PUBLIC_BASE_URL=https://images.example.com
+pnpm migrate
 ```
 
-The server deliberately rejects profile uploads when this configuration is incomplete; it never returns a fake upload URL.
+Migration filenames and checksums are recorded in `_migrations`; changing an already-applied migration fails deployment. Roll back through a database snapshot or point-in-time recovery, then add a new forward migration instead of editing history.
 
-RevenueCat webhooks are accepted at `POST /webhooks/revenuecat`. Set `REVENUECAT_WEBHOOK_SECRET` and send the HMAC-SHA256 value in `x-revenuecat-signature` (or `x-webhook-signature`). Events are committed with the entitlement or consumable balance in one database transaction, keyed by the RevenueCat event ID.
+Online statements that PostgreSQL forbids inside a transaction use this exact first line:
 
-Expo push delivery is opt-in. Set `EXPO_PUSH_ENABLED=true` and, if the Expo project requires it, `EXPO_PUSH_ACCESS_TOKEN`. A configured native client registers a device token through the `registerPushToken` GraphQL mutation; in-app notifications are persisted regardless of push delivery.
+```sql
+-- chattea:migration-mode=non-transactional
+```
 
-### Migration Rehearsal
+Such a file must contain exactly one executable statement and must be idempotent. The runner holds the global migration advisory lock, executes the statement through PostgreSQL's extended query protocol outside `BEGIN`, and records history only after success. Nontransactional mode accepts only one simple, unquoted `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <index_name>` statement, without SQL comments, expressions, operator classes, or trailing tokens. Before retry, the runner drops an existing target that PostgreSQL reports as invalid or not ready. After execution, both `indisvalid` and `indisready` must be true, then the runner records a file-and-checksum marker on the index before inserting migration history. If history insertion fails, only a valid, ready index with that exact marker is resumed; an unmarked or differently marked same-name index fails closed without being changed. Any other nontransactional body, SQL body comment, unknown migration mode, or multiple statements fail before migration side effects.
 
-Use staging or a production snapshot before the production deploy:
+Set `POSTGRES_SSL=true` when PostgreSQL requires TLS. Certificates are always verified; provide an escaped PEM certificate through `POSTGRES_SSL_CA` when the system trust store does not include the provider CA.
+
+Run `pnpm config:check` with the exact deployment environment before migrations or startup. The production container performs this preflight automatically.
+
+Production uses `docker-compose.production.yml` and requires an immutable image reference:
 
 ```bash
-$ POSTGRES_DATABASE=staging_db pnpm migrate
-$ psql "$DATABASE_URL" -c 'select "name", "appliedAt" from "_migrations" order by "name";'
-$ npm run start:prod
+export CHATTEA_BACKEND_DIGEST='<64 lowercase hex characters>'
+docker compose --env-file .env -f docker-compose.production.yml -p chattea config --quiet
+docker compose --env-file .env -f docker-compose.production.yml -p chattea pull chattea-migrate chattea-be chattea-maintenance
+docker compose --env-file .env -f docker-compose.production.yml -p chattea run --rm chattea-migrate
+docker compose --env-file .env -f docker-compose.production.yml -p chattea up -d --no-build --wait --wait-timeout 120 chattea-be chattea-maintenance
 ```
 
-Rollback plan: restore the DB snapshot or managed-provider point-in-time backup. Do not edit an already-applied SQL file; add a new migration instead.
-
-## SMS Provider
-
-Set `SMS_PROVIDER_URL` to enable the HTTP SMS sender. In production, `SMS_PROVIDER_AUTHORIZATION` is required.
-
-The default HTTP payload is generic:
-
-```json
-{ "to": "+821012345678", "text": "[Demo] 인증번호는 123456입니다.", "senderId": "sender" }
-```
-
-Match this payload and headers to the actual provider before production.
-
-## Datadog Logs
-
-The app writes JSON logs to stdout/stderr with Datadog-friendly fields:
-
-```bash
-DD_SERVICE=demo-backend
-DD_ENV=production
-DD_VERSION=<git-sha-or-release>
-```
-
-Configure the Datadog Agent or platform log drain to collect container stdout/stderr. No app-side Datadog API key is needed for log collection.
-
-## Running the app
-
-```bash
-# local DB
-$ pnpm db:up
-$ pnpm migrate
-
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
-```
-
-## Test
-
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
-```
-
-`src/modules/auth/auth-flows.spec.ts` is service-flow coverage for phone signup, signin/refresh/logout, and Kakao phone signup. It is not HTTP e2e; it does not verify GraphQL resolver wiring, cookies, guards, or CORS.
-
-`test/auth-flows.e2e-spec.ts` is HTTP e2e coverage for GraphQL auth flows, cookies, refresh guard wiring, Kakao OAuth state rejection, and CORS headers.
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://kamilmysliwiec.com)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](LICENSE).
+The API never schedules account deletion or runs migrations during startup. `chattea-maintenance` runs account deletion, push delivery, push receipts, and abandoned staging cleanup immediately and then every 60 seconds in bounded batches under a PostgreSQL advisory lock. Its health check requires `/tmp/chattea-maintenance-heartbeat` to be refreshed within 150 seconds. Inspect structured failures with `docker compose --env-file .env -f docker-compose.production.yml -p chattea logs chattea-maintenance`.

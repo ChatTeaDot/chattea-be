@@ -3,14 +3,7 @@ import { Args, Context, Mutation, Query, Resolver } from "@nestjs/graphql";
 import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
 import { UserService } from "./user.service";
-import {
-  AccountDeletionPayload,
-  CurrentSubscriptionPayload,
-  UpdateEmailInput,
-  UpdatePasswordInput,
-  UpdateUserProfileInput,
-  UserPayload,
-} from "./user.types";
+import { AccountDeletionPayload, CurrentSubscriptionPayload, UpdateUserProfileInput, UserPayload } from "./user.types";
 
 @Resolver()
 export class UserResolver {
@@ -35,20 +28,6 @@ export class UserResolver {
   }
 
   @UseGuards(JwtAccessTokenGuard)
-  @Mutation(() => Boolean)
-  async updateEmail(@Context("req") req: AuthRequest, @Args("input") input: UpdateEmailInput) {
-    await this.userService.updateEmail({ ...input, userId: req.user.userId });
-    return true;
-  }
-
-  @UseGuards(JwtAccessTokenGuard)
-  @Mutation(() => Boolean)
-  async updatePassword(@Context("req") req: AuthRequest, @Args("input") input: UpdatePasswordInput) {
-    await this.userService.updatePassword({ ...input, userId: req.user.userId });
-    return true;
-  }
-
-  @UseGuards(JwtAccessTokenGuard)
   @Mutation(() => AccountDeletionPayload)
   requestAccountDeletion(@Context("req") req: AuthRequest) {
     return this.userService.beginAccountDeletion(req.user.userId);
@@ -65,6 +44,6 @@ const toUserPayload = (user: Awaited<ReturnType<UserService["profile"]>>): UserP
   birthDate: user.birthDate ?? undefined,
   region: user.region ?? undefined,
   interestedGender: user.interestedGender ?? undefined,
-  photos: user.photos.map((photo) => ({ id: photo.id, url: photo.url, position: photo.position })),
+  photos: user.photos.map((photo) => ({ id: photo.uploadId ?? photo.id, url: photo.url, position: photo.position })),
   profileCompleted: Boolean(user.profileCompletedAt && user.photos.length >= 1),
 });

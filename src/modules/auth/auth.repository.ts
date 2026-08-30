@@ -24,28 +24,6 @@ export class KakaoPhoneVerificationTokenConsumeFailedError extends Error {}
 export class AuthRepository {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
 
-  /**
-   * 사용자 가입 정보를 저장한다.
-   *
-   * @param input 저장할 가입 정보
-   * @returns 생성된 사용자
-   */
-  async signup(input: SignupAuthRepositoryInput): Promise<User> {
-    const [user] = await this.db
-      .insert(users)
-      .values({
-        userId: input.userId,
-        email: input.email,
-        phone: input.phone,
-        password: input.password,
-        userName: input.userName,
-        gender: input.gender,
-      })
-      .returning();
-
-    return user;
-  }
-
   async signupWithPhoneVerificationToken(
     input: Omit<SignupAuthRepositoryInput, "phone">,
     token: string,
@@ -80,32 +58,10 @@ export class AuthRepository {
     });
   }
 
-  /**
-   * 로그인용 이메일로 사용자를 조회한다.
-   *
-   * @param input 로그인 입력값
-   * @returns 조회된 사용자 또는 undefined
-   */
   signin(input: SigninAuthInput): Promise<User | undefined> {
     return this.db.query.users.findFirst({ where: eq(users.email, input.email) });
   }
 
-  /**
-   * 이메일 가입 여부 확인용 사용자를 조회한다.
-   *
-   * @param email 확인할 이메일
-   * @returns 조회된 사용자 또는 undefined
-   */
-  signed(email: string): Promise<User | undefined> {
-    return this.db.query.users.findFirst({ where: eq(users.email, email) });
-  }
-
-  /**
-   * 사용자/기기별 refresh token을 저장하거나 갱신한다.
-   *
-   * @param input 저장할 refresh token 정보
-   * @returns 저장 완료 Promise
-   */
   async saveRefreshToken(input: { userId: string; deviceId: string; refreshToken: string; refreshTokenExp: Date }) {
     await this.db
       .insert(refreshTokens)
@@ -120,6 +76,41 @@ export class AuthRepository {
       });
   }
 
+  async rotateRefreshToken(input: {
+    userId: string;
+    deviceId: string;
+    expectedRefreshToken: string;
+    refreshToken: string;
+    refreshTokenExp: Date;
+  }): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      const [user] = await tx
+        .select({ userId: users.userId })
+        .from(users)
+        .where(eq(users.userId, input.userId))
+        .for("update");
+      if (!user) return false;
+
+      const [rotated] = await tx
+        .update(refreshTokens)
+        .set({
+          refreshToken: input.refreshToken,
+          refreshTokenExp: input.refreshTokenExp,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(refreshTokens.userId, input.userId),
+            eq(refreshTokens.deviceId, input.deviceId),
+            eq(refreshTokens.refreshToken, input.expectedRefreshToken),
+            gt(refreshTokens.refreshTokenExp, new Date()),
+          ),
+        )
+        .returning({ id: refreshTokens.id });
+      return Boolean(rotated);
+    });
+  }
+
   findRefreshToken(userId: string, deviceId: string): Promise<RefreshToken | undefined> {
     return this.db.query.refreshTokens.findFirst({
       where: and(eq(refreshTokens.userId, userId), eq(refreshTokens.deviceId, deviceId)),
@@ -132,13 +123,6 @@ export class AuthRepository {
       .where(and(eq(refreshTokens.userId, userId), eq(refreshTokens.deviceId, deviceId)));
   }
 
-  /**
-   * OAuth provider 식별자로 연결된 사용자를 조회한다.
-   *
-   * @param provider OAuth provider 이름
-   * @param providerUserId OAuth provider 사용자 ID
-   * @returns 연결된 사용자, null, 또는 undefined
-   */
   async findUserByIdentity(provider: string, providerUserId: string): Promise<User | null | undefined> {
     const identity: AuthIdentity | undefined = await this.db.query.authIdentities.findFirst({
       where: and(eq(authIdentities.provider, provider), eq(authIdentities.providerUserId, providerUserId)),
@@ -148,12 +132,6 @@ export class AuthRepository {
     return this.db.query.users.findFirst({ where: eq(users.userId, identity.userId) });
   }
 
-  /**
-   * 카카오 전화번호 가입 흐름의 임시 토큰을 저장한다.
-   *
-   * @param input 저장할 카카오 임시 가입 토큰 정보
-   * @returns 저장 완료 Promise
-   */
   async createKakaoPhoneVerificationToken(input: {
     token: string;
     userId?: string;
@@ -217,23 +195,10 @@ export class AuthRepository {
     });
   }
 
-  /**
-   * userId로 사용자를 조회한다.
-   *
-   * @param userId 사용자 ID
-   * @returns 조회된 사용자 또는 undefined
-   */
   findUser(userId: string): Promise<User | undefined> {
     return this.db.query.users.findFirst({ where: eq(users.userId, userId) });
   }
 
-  /**
-   * 사용자 계정에 전화번호를 연결한다.
-   *
-   * @param userId 사용자 ID
-   * @param phone 연결할 전화번호
-   * @returns 갱신된 사용자 또는 undefined
-   */
   async attachPhone(userId: string, phone: string): Promise<User | undefined> {
     const [user] = await this.db
       .update(users)
@@ -288,12 +253,6 @@ export class AuthRepository {
     });
   }
 
-  /**
-   * 카카오 identity와 전화번호가 연결된 신규 사용자를 트랜잭션으로 생성한다.
-   *
-   * @param input 생성할 카카오 전화번호 사용자 정보
-   * @returns 생성된 사용자
-   */
   async createKakaoPhoneUser(input: {
     userId: string;
     providerUserId: string;
@@ -314,6 +273,7 @@ export class AuthRepository {
           gender: input.gender,
         })
         .returning();
+      if (!user) throw new Error("USER_CREATE_FAILED");
 
       await tx.insert(authIdentities).values({
         userId: input.userId,
@@ -330,6 +290,7 @@ export class AuthRepository {
       userId: string;
       providerUserId: string;
       email: string;
+      userName: string;
       password: string;
       phone: string;
       gender: Gender;
@@ -371,10 +332,11 @@ export class AuthRepository {
           email: input.email,
           password: input.password,
           phone: input.phone,
-          userName: input.email.split("@")[0] || "kakao",
+          userName: input.userName,
           gender: input.gender,
         })
         .returning();
+      if (!user) throw new Error("USER_CREATE_FAILED");
 
       await tx.insert(authIdentities).values({
         userId: input.userId,

@@ -14,12 +14,15 @@
     },
     "incremental": true,
     "skipLibCheck": true,
-    "strictNullChecks": true,
-    "noImplicitAny": false,
-    "strictBindCallApply": false,
-    "forceConsistentCasingInFileNames": false,
-    "noFallthroughCasesInSwitch": false,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
     "esModuleInterop": true
   },
-  "exclude": ["dist", "node_modules", "eslint.config.ts", "prettier.config.ts"]
+  "exclude": ["dist", "node_modules", "eslint.config.ts"]
 }

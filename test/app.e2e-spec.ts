@@ -31,7 +31,19 @@ describe("App (e2e)", () => {
     expect(response.body.data).toEqual({ __typename: "Query" });
   });
 
-  it("requires the upload byte length in the GraphQL schema", async () => {
+  it("rejects documents that fan out into excessive resolver work", async () => {
+    const fields = Array.from({ length: 201 }, (_, index) => `field${index}: __typename`).join(" ");
+    const response = await request(app.getHttpServer())
+      .post("/graphql")
+      .send({ query: `{ ${fields} }` })
+      .expect(400);
+
+    expect(response.body.errors).toEqual([
+      expect.objectContaining({ message: "GRAPHQL_DOCUMENT_FIELD_LIMIT_EXCEEDED" }),
+    ]);
+  });
+
+  it("enforces GraphQL schema contracts", async () => {
     const response = await request(app.getHttpServer())
       .post("/graphql")
       .send({
@@ -59,5 +71,30 @@ describe("App (e2e)", () => {
     );
 
     expect(first.type).toEqual({ kind: "SCALAR", name: "Int" });
+
+    const queryType = await request(app.getHttpServer())
+      .post("/graphql")
+      .send({ query: '{ __type(name: "Query") { fields { name } } }' })
+      .expect(200);
+    expect(queryType.body.data.__type.fields.map((field: { name: string }) => field.name)).not.toContain("signed");
+  });
+
+  it("does not expose retired authentication, email, matching, or community roots", async () => {
+    const response = await request(app.getHttpServer())
+      .post("/graphql")
+      .send({
+        query:
+          '{ query: __type(name: "Query") { fields { name } } mutation: __type(name: "Mutation") { fields { name } } }',
+      })
+      .expect(200);
+    const queryFields = response.body.data.query.fields.map((field: { name: string }) => field.name);
+    const mutationFields = response.body.data.mutation.fields.map((field: { name: string }) => field.name);
+
+    for (const retiredField of ["blackMatchCandidates", "communityProfile"]) {
+      expect(queryFields).not.toContain(retiredField);
+    }
+    for (const retiredField of ["signup", "signin", "updateEmail", "updateCommunityProfile"]) {
+      expect(mutationFields).not.toContain(retiredField);
+    }
   });
 });

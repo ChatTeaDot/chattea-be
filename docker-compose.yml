@@ -9,26 +9,29 @@ services:
       NODE_ENV: production
       PORT: 4000
       DD_SERVICE: chattea-be
-      DD_ENV: ${SERVICE_ENV:-development}
-      DD_VERSION: ${SERVICE_VERSION:-dev}
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USERNAME: chattea
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chattea-dev}
-      POSTGRES_DATABASE: chattea
-      JWT_ACCESS_TOKEN_SECRET: ${JWT_ACCESS_TOKEN_SECRET:-dev-access-secret}
-      JWT_REFRESH_TOKEN_SECRET: ${JWT_REFRESH_TOKEN_SECRET:-dev-refresh-secret}
-      JWT_ACCESS_TOKEN_EXP: ${JWT_ACCESS_TOKEN_EXP:-15m}
-      JWT_REFRESH_TOKEN_EXP: ${JWT_REFRESH_TOKEN_EXP:-30d}
-      SIGNUP_TOKEN_SECRET: ${SIGNUP_TOKEN_SECRET:-dev-signup-secret}
-      KAKAO_SIGNUP_TOKEN_SECRET: ${KAKAO_SIGNUP_TOKEN_SECRET:-dev-kakao-signup-secret}
-      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:-dev-kakao-client-id}
+      DD_ENV: ${SERVICE_ENV:-production}
+      DD_VERSION: ${SERVICE_VERSION:-unversioned}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      POSTGRES_HOST: ${POSTGRES_HOST:-}
+      POSTGRES_PORT: ${POSTGRES_PORT:-}
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-}
+      POSTGRES_SSL: ${POSTGRES_SSL:-}
+      POSTGRES_SSL_CA: ${POSTGRES_SSL_CA:-}
+      JWT_ACCESS_TOKEN_SECRET: ${JWT_ACCESS_TOKEN_SECRET:-}
+      JWT_REFRESH_TOKEN_SECRET: ${JWT_REFRESH_TOKEN_SECRET:-}
+      JWT_ACCESS_TOKEN_EXP: ${JWT_ACCESS_TOKEN_EXP:-}
+      JWT_REFRESH_TOKEN_EXP: ${JWT_REFRESH_TOKEN_EXP:-}
+      SIGNUP_TOKEN_SECRET: ${SIGNUP_TOKEN_SECRET:-}
+      KAKAO_SIGNUP_TOKEN_SECRET: ${KAKAO_SIGNUP_TOKEN_SECRET:-}
+      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:-}
       KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
-      KAKAO_CALLBACK_URL: ${KAKAO_CALLBACK_URL:-http://localhost:4000/api/auth/kakao/callback}
-      PHONE_CODE_PEPPER: ${PHONE_CODE_PEPPER:-dev-only-pepper}
+      KAKAO_CALLBACK_URL: ${KAKAO_CALLBACK_URL:-}
+      PHONE_CODE_PEPPER: ${PHONE_CODE_PEPPER:-}
       SMS_PROVIDER_URL: ${SMS_PROVIDER_URL:-}
       SMS_PROVIDER_AUTHORIZATION: ${SMS_PROVIDER_AUTHORIZATION:-}
-      SMS_SENDER_ID: ${SMS_SENDER_ID:-dev-sender}
+      SMS_SENDER_ID: ${SMS_SENDER_ID:-}
       R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
       R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
       R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
@@ -37,12 +40,14 @@ services:
       EXPO_PUSH_ENABLED: ${EXPO_PUSH_ENABLED:-false}
       EXPO_PUSH_ACCESS_TOKEN: ${EXPO_PUSH_ACCESS_TOKEN:-}
       REVENUECAT_WEBHOOK_SECRET: ${REVENUECAT_WEBHOOK_SECRET:-}
-      CLIENT_URL: ${CLIENT_URL:-http://localhost:8081}
+      REVENUECAT_IOS_APP_ID: ${REVENUECAT_IOS_APP_ID:-}
+      REVENUECAT_ANDROID_APP_ID: ${REVENUECAT_ANDROID_APP_ID:-}
+      CLIENT_URL: ${CLIENT_URL:-}
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     restart: unless-stopped
     healthcheck:
       test:
@@ -58,18 +63,18 @@ services:
 
   postgres:
     container_name: chattea-postgres
-    image: postgres:17-alpine
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
     environment:
-      POSTGRES_DB: chattea
-      POSTGRES_USER: chattea
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chattea-dev}
+      POSTGRES_DB: ${POSTGRES_DATABASE:-}
+      POSTGRES_USER: ${POSTGRES_USERNAME:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U chattea -d chattea"]
+      test: ["CMD-SHELL", 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
       interval: 10s
       timeout: 5s
       retries: 5

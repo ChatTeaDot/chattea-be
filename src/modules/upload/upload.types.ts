@@ -1,4 +1,4 @@
-import { Field, InputType, Int, ObjectType } from "@nestjs/graphql";
+import { Field, ID, InputType, Int, ObjectType } from "@nestjs/graphql";
 
 @InputType()
 export class CreateUploadInput {
@@ -13,13 +13,28 @@ export class CreateUploadInput {
 }
 
 @ObjectType()
-export class UploadPayload {
-  @Field()
+export class CreateUploadPayload {
+  @Field(() => ID)
   id!: string;
 
   @Field()
   putUrl!: string;
 
-  @Field({ nullable: true })
-  publicUrl?: string;
+  @Field()
+  expiresAt!: string;
+}
+
+@ObjectType()
+export class VerifiedUploadPayload {
+  @Field(() => ID)
+  id!: string;
+
+  @Field()
+  publicUrl!: string;
+
+  @Field()
+  contentType!: string;
+
+  @Field(() => Int)
+  sizeBytes!: number;
 }

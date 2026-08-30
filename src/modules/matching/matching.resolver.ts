@@ -3,14 +3,7 @@ import { UseGuards } from "@nestjs/common";
 import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
 import { MatchingService } from "./matching.service";
-import {
-  BoostPayload,
-  LikeUserPayload,
-  MatchCandidatePayload,
-  RateScoreInput,
-  ScoreSummaryPayload,
-  UndoMatchActionPayload,
-} from "./matching.types";
+import { BoostPayload, LikeUserPayload, MatchCandidatePayload, UndoMatchActionPayload } from "./matching.types";
 
 @Resolver()
 export class MatchingResolver {
@@ -20,12 +13,6 @@ export class MatchingResolver {
   @Query(() => [MatchCandidatePayload])
   matchCandidates(@Context("req") req: AuthRequest) {
     return this.matchingService.candidates(req.user.userId);
-  }
-
-  @UseGuards(JwtAccessTokenGuard)
-  @Query(() => [MatchCandidatePayload])
-  blackMatchCandidates(@Context("req") req: AuthRequest) {
-    return this.matchingService.blackCandidates(req.user.userId);
   }
 
   @UseGuards(JwtAccessTokenGuard)
@@ -62,17 +49,5 @@ export class MatchingResolver {
   @Mutation(() => BoostPayload)
   activateBoost(@Context("req") req: AuthRequest) {
     return this.matchingService.activateBoost(req.user.userId);
-  }
-
-  @UseGuards(JwtAccessTokenGuard)
-  @Query(() => ScoreSummaryPayload)
-  scoreSummary(@Args("userId") userId: string) {
-    return this.matchingService.scoreSummary(userId);
-  }
-
-  @UseGuards(JwtAccessTokenGuard)
-  @Mutation(() => ScoreSummaryPayload)
-  rateScore(@Context("req") req: AuthRequest, @Args("input") input: RateScoreInput) {
-    return this.matchingService.rateScore(req.user.userId, input.userId, input.score);
   }
 }
