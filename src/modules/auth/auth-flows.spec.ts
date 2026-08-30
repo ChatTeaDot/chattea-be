@@ -1,7 +1,11 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import * as bcrypt from "bcrypt";
+import { Response } from "express";
+import { JwtRefreshTokenStrategy } from "src/strategys/refreshToken.strategy";
+import { AuthResolver } from "src/modules/auth/auth.resolver";
 import { AuthService } from "src/modules/auth/auth.service";
 import { AuthRepository } from "src/modules/auth/auth.repository";
+import { RefreshAuthRequest } from "src/modules/auth/auth.types";
 import { PhoneService } from "src/modules/phone/phone.service";
 import { PhoneRepository } from "src/modules/phone/phone.repository";
 import { SmsSender } from "src/modules/phone/sms.sender";
@@ -65,6 +69,14 @@ describe("auth flows (e2e)", () => {
     const phoneServices = tokenServices();
     const authServices = tokenServices();
     const authRepository = {
+      findPhoneVerificationToken: jest.fn<() => Promise<PhoneVerificationToken | undefined>>().mockResolvedValue({
+        tokenHash: "access",
+        phoneE164: verification.phoneE164,
+        verificationId: verification.id,
+        expiresAt: new Date(Date.now() + 60_000),
+        usedAt: null,
+        createdAt: new Date(),
+      }),
       signupWithPhoneVerificationToken: jest.fn<() => Promise<User | undefined>>().mockResolvedValue(user),
       saveRefreshToken: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
     } as unknown as AuthRepository;
@@ -76,6 +88,9 @@ describe("auth flows (e2e)", () => {
     );
     const phoneRepository = {
       latestVerification: jest.fn<() => Promise<PhoneVerification | undefined>>().mockResolvedValue(verification),
+      claimVerificationAttempt: jest
+        .fn<() => Promise<PhoneVerification | undefined>>()
+        .mockResolvedValue({ ...verification, attemptCount: 1 }),
       markVerified: jest.fn<() => Promise<PhoneVerification | undefined>>().mockResolvedValue(verification),
       findUserByPhone: jest.fn<() => Promise<undefined>>().mockResolvedValue(undefined),
       createPhoneVerificationToken: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
@@ -94,7 +109,13 @@ describe("auth flows (e2e)", () => {
     });
     await expect(
       phone.completePhoneSignup(
-        { email: user.email, password: "password", gender: "female", phoneVerificationToken: "access" },
+        {
+          email: user.email,
+          password: "password",
+          gender: "female",
+          phoneVerificationToken: "access",
+          termsAccepted: true,
+        },
         "device",
       ),
     ).resolves.toEqual({ accessToken: "access", refreshToken: "refresh" });
@@ -114,7 +135,9 @@ describe("auth flows (e2e)", () => {
         usedAt: null,
         createdAt: new Date(),
       }),
-      consumePhoneVerificationToken: jest.fn<() => Promise<PhoneVerificationToken | undefined>>().mockResolvedValue({} as PhoneVerificationToken),
+      consumePhoneVerificationToken: jest
+        .fn<() => Promise<PhoneVerificationToken | undefined>>()
+        .mockResolvedValue({} as PhoneVerificationToken),
       findRefreshToken: jest.fn<() => Promise<RefreshToken>>().mockResolvedValue({
         id: "df881b8f-90ed-4358-8581-5e5c132ac02d",
         userId: user.userId,
@@ -125,6 +148,7 @@ describe("auth flows (e2e)", () => {
         updatedAt: new Date(),
       }),
       saveRefreshToken: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      rotateRefreshToken: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
       deleteRefreshToken: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
     } as unknown as AuthRepository;
     const userService = {
@@ -143,10 +167,24 @@ describe("auth flows (e2e)", () => {
       .fn<() => Promise<string>>()
       .mockResolvedValueOnce("new-access")
       .mockResolvedValueOnce("new-refresh");
-    await expect(auth.refresh(user.userId, "device", "old-refresh")).resolves.toEqual({
-      accessToken: "new-access",
-      refreshToken: "new-refresh",
-    });
+    const request = { cookies: { refresh_token: "old-refresh" }, headers: {} } as RefreshAuthRequest;
+    const response = { setHeader: jest.fn(), cookie: jest.fn() } as unknown as Response;
+    const compare = jest.spyOn(jest.requireActual<typeof bcrypt>("bcrypt"), "compare");
+
+    try {
+      await new JwtRefreshTokenStrategy(services.configService, auth).validate(request, {
+        userId: user.userId,
+        deviceId: "device",
+        tokenType: "refresh",
+      });
+      await expect(new AuthResolver(auth).refresh(request, response)).resolves.toEqual({
+        accessToken: "new-access",
+        refreshToken: "new-refresh",
+      });
+      expect(compare).toHaveBeenCalledTimes(1);
+    } finally {
+      compare.mockRestore();
+    }
     await expect(auth.logout(user.userId, "device")).resolves.toBe(true);
   });
 
@@ -170,15 +208,28 @@ describe("auth flows (e2e)", () => {
       createdAt: new Date(),
     };
     const repository = {
-      findPhoneVerificationToken: jest.fn<() => Promise<PhoneVerificationToken | undefined>>().mockResolvedValue(phoneVerificationToken),
-      findKakaoPhoneVerificationToken: jest.fn<() => Promise<KakaoPhoneVerificationToken | undefined>>().mockResolvedValue(kakaoToken),
+      findPhoneVerificationToken: jest
+        .fn<() => Promise<PhoneVerificationToken | undefined>>()
+        .mockResolvedValue(phoneVerificationToken),
+      findKakaoPhoneVerificationToken: jest
+        .fn<() => Promise<KakaoPhoneVerificationToken | undefined>>()
+        .mockResolvedValue(kakaoToken),
       createKakaoPhoneUserWithTokens: jest.fn<() => Promise<User>>().mockResolvedValue(user),
       saveRefreshToken: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
     } as unknown as AuthRepository;
     const auth = new AuthService(repository, services.jwtService, services.configService, {} as UserService);
 
     await expect(
-      auth.completeKakaoPhoneSignup({ phoneVerificationToken: "signup-token", kakaoPhoneVerificationToken: "kakao-token", gender: "female" }, "device"),
+      auth.completeKakaoPhoneSignup(
+        {
+          phoneVerificationToken: "signup-token",
+          kakaoPhoneVerificationToken: "kakao-token",
+          userName: user.userName,
+          gender: "female",
+          termsAccepted: true,
+        },
+        "device",
+      ),
     ).resolves.toEqual({ accessToken: "access", refreshToken: "refresh" });
   });
 });

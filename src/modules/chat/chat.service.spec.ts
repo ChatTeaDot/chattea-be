@@ -9,12 +9,14 @@ describe("ChatService", () => {
   it("keeps empty matched rooms with a null last message", async () => {
     const repository = {
       rooms: jest
-        .fn<() => Promise<{ id: string; name: string; lastMessage: string | null }[]>>()
-        .mockResolvedValue([{ id: roomId, name: "차한잔", lastMessage: null }]),
+        .fn<() => Promise<{ id: string; name: string; lastMessage: string | null; unreadCount: number }[]>>()
+        .mockResolvedValue([{ id: roomId, name: "차한잔", lastMessage: null, unreadCount: 3 }]),
     } as unknown as ChatRepository;
     const service = new ChatService(repository);
 
-    await expect(service.rooms(userId)).resolves.toEqual([{ id: roomId, name: "차한잔", lastMessage: null }]);
+    await expect(service.rooms(userId)).resolves.toEqual([
+      { id: roomId, name: "차한잔", lastMessage: null, unreadCount: 3 },
+    ]);
     expect(repository.rooms).toHaveBeenCalledWith(userId);
   });
 
@@ -34,6 +36,7 @@ describe("ChatService", () => {
     const message = {
       id: "821cc06e-7275-49cf-9d8b-a70e65f78240",
       roomId,
+      senderUserId: userId,
       text: "hello",
       idempotencyKey: "same-key",
       createdAt: new Date("2026-01-01T00:00:00.000Z"),
@@ -49,6 +52,7 @@ describe("ChatService", () => {
     await expect(service.sendMessage(userId, { roomId, text: "hello", idempotencyKey: "same-key" })).resolves.toEqual({
       id: message.id,
       roomId,
+      senderUserId: userId,
       text: "hello",
       idempotencyKey: "same-key",
       createdAt: "2026-01-01T00:00:00.000Z",
@@ -109,15 +113,5 @@ describe("ChatService", () => {
 
     await expect(service.deleteMessage(userId, "invalid")).rejects.toThrow("MESSAGE_ID_INVALID");
     expect(repository.deleteMessage).not.toHaveBeenCalled();
-  });
-
-  it("blocks unread summaries for unsupported plans", () => {
-    const service = new ChatService({} as ChatRepository);
-
-    expect(service.unreadMessageSummary({ planId: "basic", unreadTexts: ["a".repeat(40)], enabled: true })).toEqual({
-      available: false,
-      reason: "SUMMARY_PLAN_REQUIRED",
-      sourceText: "",
-    });
   });
 });

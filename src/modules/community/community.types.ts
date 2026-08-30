@@ -1,4 +1,4 @@
-import { Field, InputType, Int, ObjectType } from "@nestjs/graphql";
+import { Field, ID, InputType, Int, ObjectType } from "@nestjs/graphql";
 
 @ObjectType()
 export class CommunityPostPayload {
@@ -41,6 +41,9 @@ export class CommunityCommentPayload {
 
 @InputType()
 export class CreateCommunityPostInput {
+  @Field(() => ID)
+  idempotencyKey!: string;
+
   @Field()
   title!: string;
 
@@ -50,6 +53,9 @@ export class CreateCommunityPostInput {
 
 @InputType()
 export class CreateCommunityCommentInput {
+  @Field(() => ID)
+  idempotencyKey!: string;
+
   @Field()
   postId!: string;
 
@@ -73,16 +79,4 @@ export class ReportCommunityCommentInput {
 
   @Field()
   reason!: string;
-}
-
-@ObjectType()
-export class CommunityProfilePayload {
-  @Field()
-  name!: string;
-}
-
-@InputType()
-export class UpdateCommunityProfileInput {
-  @Field()
-  name!: string;
 }

@@ -12,11 +12,10 @@ export class BillingController {
   @HttpCode(200)
   receive(
     @Req() req: RawBodyRequest,
-    @Headers("x-revenuecat-signature") revenueCatSignature: string | undefined,
-    @Headers("x-webhook-signature") genericSignature: string | undefined,
+    @Headers("x-revenuecat-webhook-signature") signature: string | undefined,
     @Body() payload: unknown,
   ) {
     if (!req.rawBody) throw new BadRequestException("REVENUECAT_RAW_BODY_REQUIRED");
-    return this.billingService.handleRevenueCatWebhook(req.rawBody, revenueCatSignature ?? genericSignature, payload);
+    return this.billingService.handleRevenueCatWebhook(req.rawBody, signature, payload);
   }
 }

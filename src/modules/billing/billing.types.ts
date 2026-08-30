@@ -19,4 +19,7 @@ export class ConsumableBalancePayload {
 
   @Field(() => Int)
   boostCredits!: number;
+
+  @Field(() => String, { nullable: true })
+  activeBoostUntil!: string | null;
 }

@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { JwtService, JwtSignOptions } from "@nestjs/jwt";
+import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
 import { createHash, randomInt, randomUUID } from "crypto";
 import {
@@ -9,12 +9,12 @@ import {
   CustomTooManyRequestsException,
   CustomUnauthorizedException,
 } from "src/common/errors/custom-exceptions";
+import { validatePassword } from "src/modules/auth/auth-input";
 import { AuthService } from "src/modules/auth/auth.service";
 import { isGender } from "src/modules/database/schema";
 import { PhoneErrorMessage } from "./phone.error";
 import { PhoneRepository } from "./phone.repository";
 import {
-  AttachPhoneToMeInput,
   CompleteKakaoPhoneSignupInput,
   CompletePhoneSignupInput,
   RequestPhoneCodeInput,
@@ -24,19 +24,16 @@ import {
 import { PhoneVerificationPurpose } from "./phone.types";
 import { SmsSender } from "./sms.sender";
 
+const reservationErrors = {
+  retry_too_soon: PhoneErrorMessage.PhoneCodeRetryTooSoon,
+  phone_limit: PhoneErrorMessage.PhoneRequestLimitExceeded,
+  ip_limit: PhoneErrorMessage.IpRequestLimitExceeded,
+} as const;
+
 @Injectable()
 export class PhoneService {
   private readonly logger = new Logger(PhoneService.name);
 
-  /**
-   * PhoneService에서 사용할 인증/저장소/SMS 의존성을 주입한다.
-   *
-   * @param phoneRepository 전화번호 저장소
-   * @param authService 인증 서비스
-   * @param configService 환경 설정 서비스
-   * @param jwtService JWT 서비스
-   * @param smsSender SMS 발송기
-   */
   constructor(
     private readonly phoneRepository: PhoneRepository,
     private readonly authService: AuthService,
@@ -46,51 +43,33 @@ export class PhoneService {
     private readonly smsSender: SmsSender,
   ) {}
 
-  /**
-   * 전화번호 인증 코드를 생성하고 발송 요청을 기록한다.
-   *
-   * @param input 인증 코드 요청 입력값
-   * @param ip 요청 IP
-   * @param userAgent 요청 User-Agent
-   * @returns 요청 성공 여부
-   * @throws {CustomBadRequestException} 전화번호 형식이 올바르지 않을 때
-   * @throws {CustomTooManyRequestsException} 요청 제한을 초과했을 때
-   */
-  async requestPhoneCode(input: RequestPhoneCodeInput, ip?: string, userAgent?: string) {
+  requestPhoneCode = async (input: RequestPhoneCodeInput, ip?: string, userAgent?: string) => {
     if (!Object.values(PhoneVerificationPurpose).includes(input.purpose)) {
       throw new CustomBadRequestException(PhoneErrorMessage.InvalidPhonePurpose);
     }
 
     const phoneE164 = this.normalizeKoreanPhone(input.phone);
-    const now = new Date();
-    const latest = await this.phoneRepository.latestVerification(phoneE164);
-    if (latest && now.getTime() - latest.createdAt.getTime() < 60_000) {
-      throw new CustomTooManyRequestsException(PhoneErrorMessage.PhoneCodeRetryTooSoon);
-    }
-
-    const hourAgo = new Date(now.getTime() - 60 * 60 * 1000);
-    const requestIpHash = this.sha256(ip || `no-ip:${userAgent ?? "unknown"}`);
-    const [phoneRequests, ipRequests] = await Promise.all([
-      this.phoneRepository.verificationsSinceByPhone(phoneE164, input.purpose, hourAgo),
-      this.phoneRepository.verificationsSinceByIp(requestIpHash, input.purpose, hourAgo),
-    ]);
-
-    if (phoneRequests.length >= 5)
-      throw new CustomTooManyRequestsException(PhoneErrorMessage.PhoneRequestLimitExceeded);
-    if (ipRequests.length >= 20) throw new CustomTooManyRequestsException(PhoneErrorMessage.IpRequestLimitExceeded);
-
+    const requestIpHash = this.sha256(ip || "no-ip");
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
-    const verification = await this.phoneRepository.createVerification({
+    const reservation = await this.phoneRepository.reserveVerification({
       phoneE164,
-      codeHash: await bcrypt.hash(this.pepperedCode(phoneE164, code), 10),
       purpose: input.purpose,
-      expiresAt: new Date(now.getTime() + 5 * 60 * 1000),
       requestIpHash,
       userAgentHash: this.sha256(userAgent ?? ""),
+      cooldownMs: 60_000,
+      phoneLimit: 5,
+      ipLimit: 20,
     });
+    if (reservation.status !== "reserved") {
+      throw new CustomTooManyRequestsException(reservationErrors[reservation.status]);
+    }
+    const verification = reservation.verification;
 
     try {
+      const codeHash = await bcrypt.hash(this.pepperedCode(phoneE164, code), 10);
       await this.smsSender.sendCode(phoneE164, code);
+      const activated = await this.phoneRepository.activateVerification(verification.id, codeHash, 5 * 60_000);
+      if (!activated) throw new Error("PHONE_VERIFICATION_ACTIVATION_FAILED");
     } catch {
       try {
         await this.phoneRepository.deleteVerification(verification.id);
@@ -99,33 +78,30 @@ export class PhoneService {
           JSON.stringify({ event: "phone_code_request_cleanup", purpose: input.purpose, result: "failed" }),
         );
       }
-      this.logger.warn(JSON.stringify({ event: "phone_code_request", purpose: input.purpose, result: "sms_failed" }));
+      this.logger.warn(JSON.stringify({ event: "phone_code_request", purpose: input.purpose, result: "failed" }));
       throw new CustomServiceUnavailableException(PhoneErrorMessage.SmsSendFailed);
     }
     this.logger.log(JSON.stringify({ event: "phone_code_request", purpose: input.purpose, result: "success" }));
     return { ok: true };
-  }
+  };
 
-  /**
-   * 전화번호 인증 코드를 검증하고 기존 사용자 토큰 또는 phoneVerificationToken을 반환한다.
-   *
-   * @param input 인증 코드 검증 입력값
-   * @param deviceId 기기 ID
-   * @returns 기존 사용자 토큰 또는 신규 가입용 phoneVerificationToken
-   * @throws {CustomUnauthorizedException} 인증 코드가 유효하지 않을 때
-   * @throws {CustomTooManyRequestsException} 인증 시도 제한을 초과했을 때
-   */
   async verifyPhoneCode(input: VerifyPhoneCodeInput, deviceId: string) {
     const phoneE164 = this.normalizeKoreanPhone(input.phone);
     const verification = await this.getUsableVerification(phoneE164);
-
-    const valid = await bcrypt.compare(this.pepperedCode(phoneE164, input.code), verification.codeHash);
-    if (!valid) {
-      await this.phoneRepository.incrementAttempt(verification.id);
+    if (verification.purpose !== "signup" && verification.purpose !== "login") {
       throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
     }
 
-    const verified = await this.phoneRepository.markVerified(verification.id);
+    const claimed = await this.phoneRepository.claimVerificationAttempt({
+      id: verification.id,
+      phoneE164,
+      purposes: ["signup", "login"],
+    });
+    if (!claimed) throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
+    const valid = await bcrypt.compare(this.pepperedCode(phoneE164, input.code), claimed.codeHash);
+    if (!valid) throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
+
+    const verified = await this.phoneRepository.markVerified(claimed.id);
     if (!verified) throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
     const user = await this.phoneRepository.findUserByPhone(phoneE164);
     if (user) {
@@ -136,13 +112,6 @@ export class PhoneService {
     return { existingUser: false, phoneVerificationToken };
   }
 
-  /**
-   * 전화번호 인증 토큰으로 일반 가입을 완료한다.
-   *
-   * @param input 가입 완료 입력값
-   * @param deviceId 기기 ID
-   * @returns 인증 토큰
-   */
   async completePhoneSignup(input: CompletePhoneSignupInput, deviceId: string) {
     const gender = input.gender?.trim() ?? "";
     if (!isGender(gender)) throw new CustomBadRequestException(PhoneErrorMessage.InvalidGender);
@@ -154,18 +123,12 @@ export class PhoneService {
         userName: input.userName?.trim() || input.email.split("@")[0] || "user",
         gender,
         phoneVerificationToken: input.phoneVerificationToken,
+        termsAccepted: input.termsAccepted,
       },
       deviceId,
     );
   }
 
-  /**
-   * 카카오 전화번호 가입을 완료한다.
-   *
-   * @param input 카카오 가입 완료 입력값
-   * @param deviceId 기기 ID
-   * @returns 인증 토큰
-   */
   async completeKakaoPhoneSignup(input: CompleteKakaoPhoneSignupInput, deviceId: string) {
     const gender = input.gender?.trim() ?? "";
     if (!isGender(gender)) throw new CustomBadRequestException(PhoneErrorMessage.InvalidGender);
@@ -174,71 +137,39 @@ export class PhoneService {
       {
         phoneVerificationToken: input.phoneVerificationToken,
         kakaoPhoneVerificationToken: input.kakaoPhoneVerificationToken,
+        userName: input.userName,
         gender,
+        termsAccepted: input.termsAccepted,
       },
       deviceId,
     );
   }
 
-  /**
-   * 현재 사용자에게 인증된 전화번호를 연결한다.
-   *
-   * @param userId 현재 사용자 ID
-   * @param input 전화번호 연결 입력값
-   * @returns 연결 성공 여부
-   * @throws {CustomUnauthorizedException} 인증 코드가 유효하지 않을 때
-   * @throws {CustomTooManyRequestsException} 인증 시도 제한을 초과했을 때
-   */
-  async attachPhoneToMe(userId: string, input: AttachPhoneToMeInput) {
-    const phoneE164 = this.normalizeKoreanPhone(input.phone);
-    const verification = await this.getUsableVerification(phoneE164);
-
-    const valid = await bcrypt.compare(this.pepperedCode(phoneE164, input.code), verification.codeHash);
-    if (!valid) {
-      await this.phoneRepository.incrementAttempt(verification.id);
-      throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
-    }
-
-    const verified = await this.phoneRepository.markVerified(verification.id);
-    if (!verified) throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
-    await this.phoneRepository.attachPhone(userId, phoneE164);
-    return true;
-  }
-
-  /**
-   * 전화번호 인증 코드로 비밀번호를 재설정한다.
-   *
-   * @param input 비밀번호 재설정 입력값
-   * @returns 재설정 성공 여부
-   * @throws {CustomUnauthorizedException} 인증 코드나 전화번호가 유효하지 않을 때
-   * @throws {CustomTooManyRequestsException} 인증 시도 제한을 초과했을 때
-   */
   async resetPasswordWithPhone(input: ResetPasswordWithPhoneInput) {
+    const nextPassword = validatePassword(input.password);
     const phoneE164 = this.normalizeKoreanPhone(input.phone);
     const verification = await this.getUsableVerification(phoneE164, "password_reset");
 
-    const valid = await bcrypt.compare(this.pepperedCode(phoneE164, input.code), verification.codeHash);
-    if (!valid) {
-      await this.phoneRepository.incrementAttempt(verification.id);
-      throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
-    }
+    const claimed = await this.phoneRepository.claimVerificationAttempt({
+      id: verification.id,
+      phoneE164,
+      purposes: ["password_reset"],
+    });
+    if (!claimed) throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
+    const valid = await bcrypt.compare(this.pepperedCode(phoneE164, input.code), claimed.codeHash);
+    if (!valid) throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
 
-    const verified = await this.phoneRepository.markVerified(verification.id);
-    if (!verified) throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
-
-    const password = await bcrypt.hash(input.password, 10);
-    const user = await this.phoneRepository.updatePasswordByPhone(phoneE164, password);
+    const password = await bcrypt.hash(nextPassword, 10);
+    const user = await this.phoneRepository.resetPasswordWithVerification({
+      verificationId: claimed.id,
+      phoneE164,
+      password,
+    });
     if (!user) throw new CustomUnauthorizedException(PhoneErrorMessage.PhoneVerificationRequired);
 
     return true;
   }
 
-  /**
-   * 한국 휴대폰 번호를 E.164 형식으로 정규화한다.
-   *
-   * @param phone 전화번호
-   * @returns E.164 전화번호
-   */
   private normalizeKoreanPhone(phone: string) {
     const digits = phone.replace(/\D/g, "");
     if (digits.startsWith("010") && digits.length === 11) return `+82${digits.slice(1)}`;
@@ -246,61 +177,32 @@ export class PhoneService {
     throw new CustomBadRequestException(PhoneErrorMessage.KoreanPhoneOnly);
   }
 
-  /**
-   * 전화번호 인증 코드에 서버 pepper를 섞는다.
-   *
-   * @param phoneE164 E.164 전화번호
-   * @param code 인증 코드
-   * @returns peppered 인증 코드
-   */
   private pepperedCode(phoneE164: string, code: string) {
     return `${phoneE164}:${code}:${this.configService.getOrThrow<string>("PHONE_CODE_PEPPER")}`;
   }
 
-  /**
-   * SHA-256 해시를 생성한다.
-   *
-   * @param value 해시할 값
-   * @returns hex 해시
-   */
   private sha256(value: string) {
     return createHash("sha256").update(value).digest("hex");
   }
 
-  /**
-   * 사용할 수 있는 최신 전화번호 인증 요청을 조회한다.
-   *
-   * @param phoneE164 E.164 전화번호
-   * @param purpose 인증 목적
-   * @returns 전화번호 인증 요청
-   */
   private async getUsableVerification(phoneE164: string, purpose?: string) {
     const verification = await this.phoneRepository.latestVerification(phoneE164);
     if (!verification || verification.verifiedAt)
       throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
     if (purpose && verification.purpose !== purpose)
       throw new CustomUnauthorizedException(PhoneErrorMessage.InvalidPhoneCode);
-    if (verification.expiresAt.getTime() <= Date.now())
-      throw new CustomUnauthorizedException(PhoneErrorMessage.ExpiredPhoneCode);
     if (verification.attemptCount >= 5)
       throw new CustomTooManyRequestsException(PhoneErrorMessage.PhoneCodeAttemptLimitExceeded);
 
     return verification;
   }
 
-  /**
-   * 가입용 전화번호 인증 토큰을 생성하고 저장한다.
-   *
-   * @param phoneE164 E.164 전화번호
-   * @param verificationId 인증 요청 ID
-   * @returns 전화번호 인증 토큰
-   */
   private async createPhoneVerificationToken(phoneE164: string, verificationId: string) {
     const token = await this.jwtService.signAsync(
       { phoneE164, verificationId, nonce: randomUUID() },
       {
         secret: this.configService.getOrThrow<string>("SIGNUP_TOKEN_SECRET"),
-        expiresIn: "15m" as JwtSignOptions["expiresIn"],
+        expiresIn: 15 * 60,
       },
     );
 

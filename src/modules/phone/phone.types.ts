@@ -59,8 +59,11 @@ export class CompletePhoneSignupInput {
   @Field({ nullable: true })
   userName?: string;
 
-  @Field({ nullable: true })
-  gender?: string;
+  @Field()
+  gender!: string;
+
+  @Field(() => Boolean)
+  termsAccepted!: boolean;
 }
 
 @InputType()
@@ -71,11 +74,14 @@ export class CompleteKakaoPhoneSignupInput {
   @Field()
   kakaoPhoneVerificationToken!: string;
 
-  @Field({ nullable: true })
-  userName?: string;
+  @Field()
+  userName!: string;
 
-  @Field({ nullable: true })
-  gender?: string;
+  @Field()
+  gender!: string;
+
+  @Field(() => Boolean)
+  termsAccepted!: boolean;
 }
 
 @InputType()
@@ -88,13 +94,4 @@ export class ResetPasswordWithPhoneInput {
 
   @Field()
   password!: string;
-}
-
-@InputType()
-export class AttachPhoneToMeInput {
-  @Field()
-  phone!: string;
-
-  @Field()
-  code!: string;
 }

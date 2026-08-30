@@ -7,7 +7,7 @@ const config: Record<string, unknown>[] = [
     ignores: ["dist/**", "node_modules/**"],
   },
   {
-    files: ["{src,test}/**/*.ts"],
+    files: ["{src,test,scripts}/**/*.ts"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -22,6 +22,13 @@ const config: Record<string, unknown>[] = [
     rules: {
       ...tsPlugin.configs.recommended.rules,
       ...prettierConfig.rules,
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "FunctionDeclaration",
+          message: "Use arrow function expressions",
+        },
+      ],
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
     },

@@ -2,21 +2,19 @@ import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./modules/app.module";
 import { Logger } from "@nestjs/common";
 import cookieParser from "cookie-parser";
-import express, { Request } from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import passport from "passport";
 import { randomUUID } from "crypto";
+import { parseTrustedProxy } from "src/common/config/environment";
 import { DatadogLogger } from "src/common/logging/datadog-logger";
+import { enableApiShutdownHooks } from "src/application-shutdown";
 
-/**
- * Nest 애플리케이션을 생성하고 HTTP 서버를 시작한다.
- *
- * @returns 서버 시작 완료 Promise
- */
 const bootstrap = async () => {
   const app = await NestFactory.create(AppModule, {
     logger: new DatadogLogger(),
     bodyParser: false,
   });
+  enableApiShutdownHooks(app);
   const logger = new Logger("Http");
 
   app.use(
@@ -31,13 +29,13 @@ const bootstrap = async () => {
   app
     .getHttpAdapter()
     .getInstance()
-    .set("trust proxy", process.env.TRUST_PROXY === "true");
+    .set("trust proxy", parseTrustedProxy(process.env.TRUST_PROXY) ?? false);
   app.use(cookieParser());
   app.use(passport.initialize());
   app.getHttpAdapter().get("/healthz", (_req, res) => {
     res.status(200).json({ ok: true });
   });
-  app.use((req, res, next) => {
+  app.use((req: Request, res: Response, next: NextFunction) => {
     const requestId = String(req.headers["x-request-id"] ?? randomUUID());
     const startedAt = Date.now();
     res.setHeader("x-request-id", requestId);

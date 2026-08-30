@@ -1,5 +1,5 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, count, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { Database, DRIZZLE } from "src/modules/database/database.module";
 import {
   matches,
@@ -16,57 +16,53 @@ import {
 export class ChatRepository {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
 
-  /**
-   * 매칭된 채팅방 목록과 각 방의 마지막 메시지를 조회한다.
-   *
-   * @param userId 사용자 ID
-   * @returns 채팅방 목록
-   */
   async rooms(userId: string) {
-    const rows = await this.db
-      .select({
-        id: rooms.id,
-        name: users.userName,
-        updatedAt: rooms.updatedAt,
-      })
-      .from(matches)
-      .innerJoin(rooms, eq(rooms.id, matches.roomId))
-      .innerJoin(
-        users,
-        eq(
-          users.userId,
-          sql`case when ${matches.userLowId} = ${userId} then ${matches.userHighId} else ${matches.userLowId} end`,
-        ),
-      )
-      .where(or(eq(matches.userLowId, userId), eq(matches.userHighId, userId)))
-      .orderBy(desc(rooms.updatedAt), desc(rooms.id));
+    const result = await this.db.execute<{
+      id: string;
+      name: string;
+      lastMessage: string | null;
+      unreadCount: number;
+      updatedAt: Date;
+    }>(sql`
+      SELECT
+        ${rooms.id} AS id,
+        ${users.userName} AS name,
+        latest.text AS "lastMessage",
+        count(unread.id)::int AS "unreadCount",
+        ${rooms.updatedAt} AS "updatedAt"
+      FROM ${matches}
+      INNER JOIN ${rooms} ON ${rooms.id} = ${matches.roomId}
+      INNER JOIN ${users}
+        ON ${users.userId} = CASE
+          WHEN ${matches.userLowId} = ${userId} THEN ${matches.userHighId}
+          ELSE ${matches.userLowId}
+        END
+      LEFT JOIN LATERAL (
+        SELECT ${messages.text} AS text
+        FROM ${messages}
+        WHERE ${messages.roomId} = ${rooms.id} AND ${messages.deletedAt} IS NULL
+        ORDER BY ${messages.createdAt} DESC, ${messages.id} DESC
+        LIMIT 1
+      ) latest ON true
+      LEFT JOIN ${readReceipts} receipt
+        ON receipt."roomId" = ${rooms.id} AND receipt."userId" = ${userId}
+      LEFT JOIN ${messages} unread
+        ON unread."roomId" = ${rooms.id}
+       AND unread."senderUserId" <> ${userId}
+       AND unread."deletedAt" IS NULL
+       AND (
+         receipt."userId" IS NULL
+         OR (receipt."lastReadMessageId" IS NULL AND unread."createdAt" > receipt."readAt")
+         OR (unread."createdAt", unread.id) > (receipt."readAt", receipt."lastReadMessageId")
+       )
+      WHERE ${matches.userLowId} = ${userId} OR ${matches.userHighId} = ${userId}
+      GROUP BY ${rooms.id}, ${users.userName}, latest.text
+      ORDER BY ${rooms.updatedAt} DESC, ${rooms.id} DESC
+    `);
 
-    return Promise.all(
-      rows.map(async (room) => {
-        const lastMessage = await this.db.query.messages.findFirst({
-          columns: { text: true },
-          where: and(eq(messages.roomId, room.id), isNull(messages.deletedAt)),
-          orderBy: [desc(messages.createdAt), desc(messages.id)],
-        });
-
-        const unreadCount = await this.unreadMessageCount(room.id, userId);
-        return {
-          id: room.id,
-          name: room.name,
-          lastMessage: lastMessage?.text ?? null,
-          unreadCount: Number(unreadCount),
-          updatedAt: room.updatedAt,
-        };
-      }),
-    );
+    return result.rows;
   }
 
-  /**
-   * 커서 메시지의 생성 시각을 조회한다.
-   *
-   * @param messageId 커서로 사용할 메시지 ID
-   * @returns 메시지 생성 시각 또는 undefined
-   */
   async findMessageCursor(messageId: string, roomId: string) {
     return this.db.query.messages.findFirst({
       columns: { id: true },
@@ -90,12 +86,6 @@ export class ChatRepository {
     return members.map((member) => member.userId);
   }
 
-  /**
-   * 채팅방 메시지 목록을 조회한다.
-   *
-   * @param input 채팅방 ID, 조회 개수, 커서 시각
-   * @returns 메시지 목록
-   */
   async messages(input: { roomId: string; limit: number; after?: string | null }) {
     const where = input.after
       ? and(
@@ -111,7 +101,7 @@ export class ChatRepository {
         )
       : and(eq(messages.roomId, input.roomId), isNull(messages.deletedAt));
 
-    return this.db
+    const rows = await this.db
       .select({
         id: messages.id,
         roomId: messages.roomId,
@@ -122,26 +112,41 @@ export class ChatRepository {
       })
       .from(messages)
       .where(where)
-      .orderBy(messages.createdAt, messages.id)
+      .orderBy(
+        input.after ? messages.createdAt : desc(messages.createdAt),
+        input.after ? messages.id : desc(messages.id),
+      )
       .limit(input.limit);
+
+    return input.after ? rows : rows.reverse();
   }
 
-  /**
-   * 채팅방이 없으면 기본 이름으로 생성한다.
-   *
-   * @param roomId 채팅방 ID
-   * @returns 저장 완료 Promise
-   */
+  markRoomRead = async (roomId: string, userId: string): Promise<void> => {
+    await this.db.execute(sql`
+      INSERT INTO ${readReceipts} ("roomId", "userId", "lastReadMessageId", "readAt")
+      SELECT ${roomId}, ${userId}, ${messages.id}, ${messages.createdAt}
+      FROM ${messages}
+      WHERE ${messages.roomId} = ${roomId} AND ${messages.deletedAt} IS NULL
+      ORDER BY ${messages.createdAt} DESC, ${messages.id} DESC
+      LIMIT 1
+      ON CONFLICT ("roomId", "userId") DO UPDATE
+      SET
+        "lastReadMessageId" = EXCLUDED."lastReadMessageId",
+        "readAt" = EXCLUDED."readAt"
+      WHERE EXCLUDED."readAt" > ${readReceipts.readAt}
+         OR (
+           EXCLUDED."readAt" = ${readReceipts.readAt}
+           AND EXCLUDED."lastReadMessageId" IS NOT NULL
+           AND ${readReceipts.lastReadMessageId} IS NOT NULL
+           AND EXCLUDED."lastReadMessageId" > ${readReceipts.lastReadMessageId}
+         )
+    `);
+  };
+
   async ensureRoom(roomId: string) {
     await this.db.insert(rooms).values({ id: roomId, name: "대화" }).onConflictDoNothing();
   }
 
-  /**
-   * idempotency key로 기존 메시지를 조회한다.
-   *
-   * @param idempotencyKey 중복 전송 방지 키
-   * @returns 기존 메시지 또는 undefined
-   */
   async findMessageByIdempotencyKey(idempotencyKey: string, roomId: string, senderUserId: string) {
     return this.db.query.messages.findFirst({
       where: and(
@@ -152,12 +157,6 @@ export class ChatRepository {
     });
   }
 
-  /**
-   * 삭제되지 않은 메시지 수를 조회한다.
-   *
-   * @param roomId 채팅방 ID
-   * @returns 활성 메시지 수
-   */
   async activeMessageCount(roomId: string) {
     const [row] = await this.db
       .select({ count: count() })
@@ -167,38 +166,37 @@ export class ChatRepository {
     return row?.count ?? 0;
   }
 
-  /**
-   * 새 메시지를 저장하고 채팅방 갱신 시각을 변경한다.
-   *
-   * @param input 메시지 생성 입력값
-   * @returns 생성된 메시지
-   */
   async createMessage(input: { roomId: string; senderUserId: string; text: string; idempotencyKey?: string | null }) {
-    const [message] = await this.db
-      .insert(messages)
-      .values({
-        roomId: input.roomId,
-        senderUserId: input.senderUserId,
-        text: input.text,
-        idempotencyKey: input.idempotencyKey,
-      })
-      .onConflictDoNothing({ target: [messages.roomId, messages.senderUserId, messages.idempotencyKey] })
-      .returning();
+    return this.db.transaction(async (tx) => {
+      const [message] = await tx
+        .insert(messages)
+        .values({
+          roomId: input.roomId,
+          senderUserId: input.senderUserId,
+          text: input.text,
+          idempotencyKey: input.idempotencyKey,
+        })
+        .onConflictDoNothing({ target: [messages.roomId, messages.senderUserId, messages.idempotencyKey] })
+        .returning();
 
-    if (!message && input.idempotencyKey) {
-      return this.findMessageByIdempotencyKey(input.idempotencyKey, input.roomId, input.senderUserId);
-    }
+      if (message) {
+        await tx.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, input.roomId));
+        return { message, created: true } as const;
+      }
 
-    await this.touchRoom(input.roomId);
-    return message;
+      const replayedMessage = input.idempotencyKey
+        ? await tx.query.messages.findFirst({
+            where: and(
+              eq(messages.idempotencyKey, input.idempotencyKey),
+              eq(messages.roomId, input.roomId),
+              eq(messages.senderUserId, input.senderUserId),
+            ),
+          })
+        : undefined;
+      return { message: replayedMessage, created: false } as const;
+    });
   }
 
-  /**
-   * 메시지 본문을 수정하고 채팅방 갱신 시각을 변경한다.
-   *
-   * @param input 수정할 메시지 ID와 본문
-   * @returns 수정된 메시지 또는 undefined
-   */
   async editMessage(input: { messageId: string; senderUserId: string; text: string }) {
     const [message] = await this.db
       .update(messages)
@@ -216,12 +214,6 @@ export class ChatRepository {
     return message;
   }
 
-  /**
-   * 메시지를 soft delete 처리한다.
-   *
-   * @param messageId 삭제할 메시지 ID
-   * @returns 삭제된 메시지 또는 undefined
-   */
   async deleteMessage(messageId: string, senderUserId: string) {
     const [message] = await this.db
       .update(messages)
@@ -232,35 +224,14 @@ export class ChatRepository {
     return message;
   }
 
-  /**
-   * 채팅방을 ID로 조회한다.
-   *
-   * @param roomId 채팅방 ID
-   * @returns 채팅방 또는 undefined
-   */
   async findRoom(roomId: string) {
     return this.db.query.rooms.findFirst({ where: eq(rooms.id, roomId) });
   }
 
-  /**
-   * 사용자를 차단 목록에 저장한다.
-   *
-   * @param blockerUserId 차단한 사용자 ID
-   * @param blockedUserId 차단된 사용자 ID
-   * @returns 저장 완료 Promise
-   */
   async blockUser(blockerUserId: string, blockedUserId: string) {
     await this.db.insert(userBlocks).values({ blockerUserId, blockedUserId }).onConflictDoNothing();
   }
 
-  /**
-   * 메시지 신고 사유를 저장하거나 갱신한다.
-   *
-   * @param reporterUserId 신고한 사용자 ID
-   * @param messageId 신고 대상 메시지 ID
-   * @param reason 신고 사유
-   * @returns 저장 완료 Promise
-   */
   async reportMessage(reporterUserId: string, messageId: string, reason: string): Promise<boolean> {
     const rows = await this.db.execute(sql`
       INSERT INTO ${messageReports} ("messageId", "reporterUserId", reason)
@@ -279,24 +250,5 @@ export class ChatRepository {
 
   private async touchRoom(roomId: string) {
     await this.db.update(rooms).set({ updatedAt: new Date() }).where(eq(rooms.id, roomId));
-  }
-
-  private async unreadMessageCount(roomId: string, userId: string): Promise<number | string> {
-    const receipt = await this.db.query.readReceipts.findFirst({
-      columns: { readAt: true },
-      where: and(eq(readReceipts.roomId, roomId), eq(readReceipts.userId, userId)),
-    });
-    const [row] = await this.db
-      .select({ count: count() })
-      .from(messages)
-      .where(
-        and(
-          eq(messages.roomId, roomId),
-          sql`${messages.senderUserId} <> ${userId}`,
-          isNull(messages.deletedAt),
-          receipt ? gt(messages.createdAt, receipt.readAt) : undefined,
-        ),
-      );
-    return row?.count ?? 0;
   }
 }

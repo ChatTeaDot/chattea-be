@@ -13,11 +13,6 @@ import {
 export class CommunityRepository {
   constructor(@Inject(DRIZZLE) private readonly db: Database) {}
 
-  /**
-   * 삭제되지 않은 커뮤니티 게시글 목록을 댓글 수와 함께 조회한다.
-   *
-   * @returns 커뮤니티 게시글 목록
-   */
   async posts() {
     return this.db
       .select({
@@ -40,12 +35,6 @@ export class CommunityRepository {
       .limit(50);
   }
 
-  /**
-   * 게시글의 삭제되지 않은 댓글 목록을 조회한다.
-   *
-   * @param postId 게시글 ID
-   * @returns 댓글 목록
-   */
   async comments(postId: string) {
     return this.db
       .select({
@@ -62,54 +51,68 @@ export class CommunityRepository {
       .limit(100);
   }
 
-  /**
-   * 커뮤니티 게시글을 생성한다.
-   *
-   * @param input 작성자 ID와 게시글 본문
-   * @returns 생성된 게시글
-   */
-  async createPost(input: { userId: string; title: string; body: string }) {
+  async createPost(input: { id: string; userId: string; title: string; body: string }) {
     const [post] = await this.db
       .insert(communityPosts)
       .values({
+        id: input.id,
         authorUserId: input.userId,
         title: input.title,
         body: input.body,
       })
+      .onConflictDoNothing({ target: communityPosts.id })
       .returning();
 
-    return post;
+    if (post) return { post, created: true } as const;
+
+    const replayedPost = await this.db.query.communityPosts.findFirst({
+      where: eq(communityPosts.id, input.id),
+    });
+    if (
+      !replayedPost ||
+      replayedPost.authorUserId !== input.userId ||
+      replayedPost.title !== input.title ||
+      replayedPost.body !== input.body ||
+      replayedPost.deletedAt
+    ) {
+      throw new Error("COMMUNITY_POST_IDEMPOTENCY_KEY_ALREADY_USED");
+    }
+    return { post: replayedPost, created: false } as const;
   }
 
-  /**
-   * 삭제되지 않은 게시글을 ID로 조회한다.
-   *
-   * @param postId 게시글 ID
-   * @returns 게시글 또는 undefined
-   */
   async findPost(postId: string) {
     return this.db.query.communityPosts.findFirst({
       where: and(eq(communityPosts.id, postId), isNull(communityPosts.deletedAt)),
     });
   }
 
-  /**
-   * 커뮤니티 댓글을 생성한다.
-   *
-   * @param input 작성자 ID, 게시글 ID, 댓글 본문
-   * @returns 생성된 댓글
-   */
-  async createComment(input: { userId: string; postId: string; body: string }) {
+  async createComment(input: { id: string; userId: string; postId: string; body: string }) {
     const [comment] = await this.db
       .insert(communityComments)
       .values({
+        id: input.id,
         postId: input.postId,
         authorUserId: input.userId,
         body: input.body,
       })
+      .onConflictDoNothing({ target: communityComments.id })
       .returning();
 
-    return comment;
+    if (comment) return { comment, created: true } as const;
+
+    const replayedComment = await this.db.query.communityComments.findFirst({
+      where: eq(communityComments.id, input.id),
+    });
+    if (
+      !replayedComment ||
+      replayedComment.authorUserId !== input.userId ||
+      replayedComment.postId !== input.postId ||
+      replayedComment.body !== input.body ||
+      replayedComment.deletedAt
+    ) {
+      throw new Error("COMMUNITY_COMMENT_IDEMPOTENCY_KEY_ALREADY_USED");
+    }
+    return { comment: replayedComment, created: false } as const;
   }
 
   async findComment(commentId: string) {
@@ -118,12 +121,6 @@ export class CommunityRepository {
     });
   }
 
-  /**
-   * 게시글 신고 사유를 저장하거나 갱신한다.
-   *
-   * @param input 신고자 ID, 게시글 ID, 신고 사유
-   * @returns 저장 완료 Promise
-   */
   async reportPost(input: { userId: string; postId: string; reason: string }) {
     await this.db
       .insert(communityPostReports)
@@ -148,32 +145,7 @@ export class CommunityRepository {
       });
   }
 
-  /**
-   * 커뮤니티 프로필을 조회한다.
-   *
-   * @param userId 사용자 ID
-   * @returns 커뮤니티 프로필 또는 undefined
-   */
   findProfile(userId: string) {
     return this.db.query.communityProfiles.findFirst({ where: eq(communityProfiles.userId, userId) });
-  }
-
-  /**
-   * 커뮤니티 프로필 이름을 생성하거나 갱신한다.
-   *
-   * @param input 사용자 ID와 커뮤니티 이름
-   * @returns 커뮤니티 프로필
-   */
-  async upsertProfile(input: { userId: string; name: string }) {
-    const [profile] = await this.db
-      .insert(communityProfiles)
-      .values(input)
-      .onConflictDoUpdate({
-        target: communityProfiles.userId,
-        set: { name: input.name, updatedAt: new Date() },
-      })
-      .returning();
-
-    return profile;
   }
 }

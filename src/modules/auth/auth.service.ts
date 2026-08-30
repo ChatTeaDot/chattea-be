@@ -1,12 +1,22 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { JwtService, JwtSignOptions } from "@nestjs/jwt";
+import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
 import { v4 as uuidv4 } from "uuid";
 import { CustomBadRequestException, CustomUnauthorizedException } from "src/common/errors/custom-exceptions";
-import { Gender, User } from "src/modules/database/schema";
+import { hashToken } from "src/common/security/token-hash";
+import { Gender, RefreshToken, User } from "src/modules/database/schema";
 import { UserService } from "src/modules/user/user.service";
 import { AuthErrorMessage } from "./auth.error";
+import {
+  normalizeEmail,
+  normalizeOptionalEmail,
+  normalizeOptionalUserName,
+  normalizeSigninEmail,
+  normalizeUserName,
+  validatePassword,
+} from "./auth-input";
+import { AUTH_TOKEN_AUDIENCE, AUTH_TOKEN_ISSUER } from "./token-claims";
 import {
   AuthRepository,
   KakaoPhoneVerificationTokenConsumeFailedError,
@@ -18,14 +28,6 @@ import { KakaoLoginResult, KakaoProfile, SigninAuthInput, SignupAuthInput } from
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
 
-  /**
-   * AuthService에서 사용할 인증 의존성을 주입한다.
-   *
-   * @param authRepository 인증 저장소
-   * @param jwtService JWT 서비스
-   * @param configService 환경 설정 서비스
-   * @param userService 사용자 서비스
-   */
   constructor(
     private readonly authRepository: AuthRepository,
     private readonly jwtService: JwtService,
@@ -33,20 +35,21 @@ export class AuthService {
     private readonly userService: UserService,
   ) {}
 
-  /**
-   * 전화번호 인증 토큰으로 신규 사용자를 가입시키고 토큰을 발급한다.
-   *
-   * @param input 가입 입력값
-   * @param deviceId 기기 ID
-   * @returns 인증 토큰
-   */
   async signup(input: SignupAuthInput, deviceId: string) {
+    if (!input.termsAccepted) throw new CustomBadRequestException(AuthErrorMessage.TermsNotAccepted);
+    const email = normalizeEmail(input.email);
+    const userName = normalizeUserName(input.userName);
+    const password = validatePassword(input.password);
+    await this.findPhoneVerificationToken(input.phoneVerificationToken);
+
     const user = await this.mapDuplicateUserError(
       this.authRepository.signupWithPhoneVerificationToken(
         {
           ...input,
+          email,
+          userName,
           userId: uuidv4(),
-          password: await bcrypt.hash(input.password, 10),
+          password: await bcrypt.hash(password, 10),
         },
         input.phoneVerificationToken,
       ),
@@ -57,18 +60,14 @@ export class AuthService {
     return this.issueTokens(user, deviceId);
   }
 
-  /**
-   * 이메일/비밀번호와 전화번호 인증 토큰으로 로그인한다.
-   *
-   * @param input 로그인 입력값
-   * @param deviceId 기기 ID
-   * @returns 인증 토큰
-   */
   async signin(input: SigninAuthInput, deviceId: string) {
-    const user = await this.authRepository.signin(input);
+    const email = normalizeSigninEmail(input.email);
+    const password = input.password;
+    let user = await this.authRepository.signin({ ...input, email, password });
+    if (!user && email !== input.email) user = await this.authRepository.signin(input);
     if (!user) throw new CustomUnauthorizedException(AuthErrorMessage.AuthRequired);
 
-    const isPasswordValid = await bcrypt.compare(input.password, user.password);
+    const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) throw new CustomUnauthorizedException(AuthErrorMessage.AuthRequired);
 
     const phoneVerificationToken = await this.findPhoneVerificationToken(input.phoneVerificationToken);
@@ -81,40 +80,40 @@ export class AuthService {
     return this.issueTokens(user, deviceId);
   }
 
-  /**
-   * 이메일 가입 여부를 조회한다.
-   *
-   * @param email 이메일
-   * @returns 가입 여부
-   */
-  async signed(email: string) {
-    const user = await this.authRepository.signed(email);
-    return { isSigned: !!user };
-  }
-
-  /**
-   * 카카오 프로필로 전화번호 가입 토큰을 발급한다.
-   *
-   * @param profile 카카오 프로필
-   * @returns 카카오 로그인 결과
-   */
   async loginWithKakao(profile: KakaoProfile): Promise<KakaoLoginResult> {
     const foundUser = await this.authRepository.findUserByIdentity("kakao", profile.providerUserId);
     this.logger.log(JSON.stringify({ event: "auth_kakao_login", result: "token_issued", existingUser: !!foundUser }));
     return { kakaoPhoneVerificationToken: await this.createKakaoPhoneVerificationToken(profile, foundUser?.userId) };
   }
 
-  /**
-   * 카카오 전화번호 가입을 완료하고 인증 토큰을 발급한다.
-   *
-   * @param input 전화번호 인증 토큰과 카카오 전화번호 인증 토큰
-   * @param deviceId 기기 ID
-   * @returns 인증 토큰
-   */
+  async loginWithKakaoAccessToken(accessToken: string, deviceId: string) {
+    const profile = await this.getKakaoProfile(accessToken);
+    const foundUser = await this.authRepository.findUserByIdentity("kakao", profile.providerUserId);
+
+    if (foundUser?.phone) {
+      await this.userService.restoreIfWithinGrace(foundUser.userId);
+      return { requiresPhone: false as const, session: await this.issueTokens(foundUser, deviceId) };
+    }
+
+    return {
+      requiresPhone: true as const,
+      kakaoPhoneVerificationToken: await this.createKakaoPhoneVerificationToken(profile, foundUser?.userId),
+      userName: foundUser?.userName || profile.userName || null,
+    };
+  }
+
   async completeKakaoPhoneSignup(
-    input: { phoneVerificationToken: string; kakaoPhoneVerificationToken: string; gender?: Gender },
+    input: {
+      phoneVerificationToken: string;
+      kakaoPhoneVerificationToken: string;
+      userName: string;
+      gender: Gender;
+      termsAccepted: boolean;
+    },
     deviceId: string,
   ) {
+    if (!input.termsAccepted) throw new CustomBadRequestException(AuthErrorMessage.TermsNotAccepted);
+
     const [phoneVerificationToken, kakaoToken] = await Promise.all([
       this.findPhoneVerificationToken(input.phoneVerificationToken),
       this.authRepository.findKakaoPhoneVerificationToken(input.kakaoPhoneVerificationToken),
@@ -143,6 +142,10 @@ export class AuthService {
     }
 
     if (!input.gender) throw new CustomBadRequestException(AuthErrorMessage.InvalidGender);
+    const email = normalizeEmail(
+      kakaoToken.email ?? `kakao_${hashToken(kakaoToken.providerUserId).slice(0, 32)}@kakao.local`,
+    );
+    const userName = normalizeUserName(input.userName);
 
     const user = await this.mapDuplicateUserError(
       this.mapTokenConsumeError(
@@ -150,7 +153,8 @@ export class AuthService {
           {
             userId: uuidv4(),
             providerUserId: kakaoToken.providerUserId,
-            email: kakaoToken.email ?? `kakao_${kakaoToken.providerUserId}@kakao.local`,
+            email,
+            userName,
             password: await bcrypt.hash(uuidv4(), 10),
             phone: phoneVerificationToken.phoneE164,
             gender: input.gender,
@@ -163,76 +167,97 @@ export class AuthService {
     return this.issueTokens(user, deviceId);
   }
 
-  /**
-   * refresh token으로 인증 토큰을 재발급한다.
-   *
-   * @param userId 사용자 ID
-   * @param deviceId 기기 ID
-   * @param refreshToken refresh token
-   * @returns 인증 토큰
-   */
-  async refresh(userId: string, deviceId: string, refreshToken: string) {
-    const result = await this.compareUserRefreshToken(userId, deviceId, refreshToken);
-    if (!result) throw new CustomUnauthorizedException(AuthErrorMessage.AuthRequired);
-
+  async refresh(validatedRefreshToken: RefreshToken) {
+    const { userId, deviceId } = validatedRefreshToken;
     const user = await this.userService.findUser(userId);
+    const accessToken = await this.createAccessToken(user);
+    const nextRefreshToken = await this.createRefreshToken(user, deviceId);
+    const nextRefreshState = await this.prepareRefreshToken(nextRefreshToken);
+    const rotated = await this.authRepository.rotateRefreshToken({
+      userId,
+      deviceId,
+      expectedRefreshToken: validatedRefreshToken.refreshToken,
+      ...nextRefreshState,
+    });
+    if (!rotated) throw new CustomUnauthorizedException(AuthErrorMessage.AuthRequired);
+
     this.logger.log(JSON.stringify({ event: "auth_refresh", result: "success" }));
-    return this.issueTokens(user, deviceId);
+    return { accessToken, refreshToken: nextRefreshToken };
   }
 
-  /**
-   * 현재 기기의 refresh token을 삭제한다.
-   *
-   * @param userId 사용자 ID
-   * @param deviceId 기기 ID
-   * @returns 로그아웃 성공 여부
-   */
   async logout(userId: string, deviceId: string) {
     await this.authRepository.deleteRefreshToken(userId, deviceId);
     this.logger.log(JSON.stringify({ event: "auth_logout", result: "success" }));
     return true;
   }
 
-  /**
-   * 저장된 refresh token과 입력 refresh token을 비교한다.
-   *
-   * @param userId 사용자 ID
-   * @param deviceId 기기 ID
-   * @param refreshToken refresh token
-   * @returns refresh token 유효 여부
-   */
-  async compareUserRefreshToken(userId: string, deviceId: string, refreshToken: string) {
+  async validateUserRefreshToken(userId: string, deviceId: string, refreshToken: string) {
     const savedToken = await this.authRepository.findRefreshToken(userId, deviceId);
-    if (!savedToken) return false;
-    if (savedToken.refreshTokenExp.getTime() <= Date.now()) return false;
+    if (!savedToken) return undefined;
+    if (savedToken.refreshTokenExp.getTime() <= Date.now()) return undefined;
+    if (!(await bcrypt.compare(refreshToken, savedToken.refreshToken))) return undefined;
 
-    return bcrypt.compare(refreshToken, savedToken.refreshToken);
+    return savedToken;
   }
 
-  /**
-   * 사용자에게 인증 토큰을 발급한다.
-   *
-   * @param user 사용자
-   * @param deviceId 기기 ID
-   * @returns 인증 토큰
-   */
   issueTokensForUser(user: User, deviceId: string) {
     return this.issueTokens(user, deviceId);
   }
 
-  /**
-   * 카카오 전화번호 가입 토큰을 생성하고 저장한다.
-   *
-   * @param profile 카카오 프로필
-   * @param userId 기존 사용자 ID
-   * @returns 카카오 전화번호 인증 토큰
-   */
+  private async getKakaoProfile(accessToken: string): Promise<KakaoProfile> {
+    if (!accessToken.trim()) throw new CustomUnauthorizedException(AuthErrorMessage.AuthRequired);
+
+    let response: Response;
+    try {
+      response = await fetch("https://kapi.kakao.com/v2/user/me", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(5_000),
+      });
+    } catch {
+      throw new CustomUnauthorizedException(AuthErrorMessage.AuthRequired);
+    }
+    if (!response.ok) throw new CustomUnauthorizedException(AuthErrorMessage.AuthRequired);
+
+    let value: unknown;
+    try {
+      value = await response.json();
+    } catch {
+      throw new CustomUnauthorizedException(AuthErrorMessage.AuthRequired);
+    }
+    if (typeof value !== "object" || value === null || !("id" in value)) {
+      throw new CustomUnauthorizedException(AuthErrorMessage.AuthRequired);
+    }
+
+    const providerUserId = value.id;
+    if ((typeof providerUserId !== "string" && typeof providerUserId !== "number") || !String(providerUserId)) {
+      throw new CustomUnauthorizedException(AuthErrorMessage.AuthRequired);
+    }
+
+    const account =
+      "kakao_account" in value && typeof value.kakao_account === "object" && value.kakao_account !== null
+        ? value.kakao_account
+        : undefined;
+    const properties =
+      "properties" in value && typeof value.properties === "object" && value.properties !== null
+        ? value.properties
+        : undefined;
+
+    return {
+      providerUserId: String(providerUserId),
+      email: account && "email" in account && typeof account.email === "string" ? account.email : undefined,
+      userName:
+        properties && "nickname" in properties && typeof properties.nickname === "string"
+          ? normalizeOptionalUserName(properties.nickname)
+          : undefined,
+    };
+  }
+
   private async createKakaoPhoneVerificationToken(profile: KakaoProfile, userId?: string) {
     const token = await this.jwtService.signAsync(
       { provider: "kakao", providerUserId: profile.providerUserId },
       {
         secret: this.configService.getOrThrow<string>("KAKAO_SIGNUP_TOKEN_SECRET"),
-        expiresIn: "15m" as JwtSignOptions["expiresIn"],
+        expiresIn: 15 * 60,
       },
     );
 
@@ -240,19 +265,13 @@ export class AuthService {
       token,
       userId,
       providerUserId: profile.providerUserId,
-      email: profile.email,
+      email: normalizeOptionalEmail(profile.email),
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     });
 
     return token;
   }
 
-  /**
-   * 전화번호 인증 토큰을 조회하고 없으면 예외를 던진다.
-   *
-   * @param token 전화번호 인증 토큰
-   * @returns 전화번호 인증 토큰 레코드
-   */
   private async findPhoneVerificationToken(token: string) {
     const phoneVerificationToken = await this.authRepository.findPhoneVerificationToken(token);
     if (!phoneVerificationToken) throw new CustomUnauthorizedException(AuthErrorMessage.InvalidPhoneVerificationToken);
@@ -260,23 +279,12 @@ export class AuthService {
     return phoneVerificationToken;
   }
 
-  /**
-   * 전화번호 인증 토큰을 사용 처리한다.
-   *
-   * @param token 전화번호 인증 토큰
-   */
   private async consumePhoneVerificationToken(token: string) {
     if (!(await this.authRepository.consumePhoneVerificationToken(token))) {
       throw new CustomUnauthorizedException(AuthErrorMessage.InvalidPhoneVerificationToken);
     }
   }
 
-  /**
-   * 인증 토큰 사용 실패를 인증 예외로 변환한다.
-   *
-   * @param operation 실행할 저장소 작업
-   * @returns 작업 결과
-   */
   private async mapTokenConsumeError<T>(operation: Promise<T>) {
     try {
       return await operation;
@@ -291,12 +299,6 @@ export class AuthService {
     }
   }
 
-  /**
-   * 중복 사용자 저장소 에러를 요청 예외로 변환한다.
-   *
-   * @param operation 실행할 저장소 작업
-   * @returns 작업 결과
-   */
   private async mapDuplicateUserError<T>(operation: Promise<T>) {
     try {
       return await operation;
@@ -306,23 +308,10 @@ export class AuthService {
     }
   }
 
-  /**
-   * PostgreSQL unique violation 여부를 확인한다.
-   *
-   * @param error 확인할 에러
-   * @returns unique violation 여부
-   */
   private isUniqueViolation(error: unknown) {
     return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
   }
 
-  /**
-   * access token과 refresh token을 발급하고 refresh token을 저장한다.
-   *
-   * @param user 사용자
-   * @param deviceId 기기 ID
-   * @returns 인증 토큰
-   */
   private async issueTokens(user: User, deviceId: string) {
     const accessToken = await this.createAccessToken(user);
     const refreshToken = await this.createRefreshToken(user, deviceId);
@@ -332,56 +321,41 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  /**
-   * access token을 생성한다.
-   *
-   * @param user 사용자
-   * @returns access token
-   */
   private createAccessToken(user: User) {
     return this.jwtService.signAsync(
-      { userId: user.userId },
+      { userId: user.userId, tokenType: "access" },
       {
+        audience: AUTH_TOKEN_AUDIENCE,
+        issuer: AUTH_TOKEN_ISSUER,
         secret: this.configService.getOrThrow<string>("JWT_ACCESS_TOKEN_SECRET"),
-        expiresIn: this.configService.getOrThrow<string>("JWT_ACCESS_TOKEN_EXP") as JwtSignOptions["expiresIn"],
+        expiresIn: this.configService.getOrThrow<number>("JWT_ACCESS_TOKEN_EXP"),
       },
     );
   }
 
-  /**
-   * refresh token을 생성한다.
-   *
-   * @param user 사용자
-   * @param deviceId 기기 ID
-   * @returns refresh token
-   */
   private createRefreshToken(user: User, deviceId: string) {
     return this.jwtService.signAsync(
-      { userId: user.userId, deviceId },
+      { userId: user.userId, deviceId, tokenType: "refresh" },
       {
+        audience: AUTH_TOKEN_AUDIENCE,
+        issuer: AUTH_TOKEN_ISSUER,
         secret: this.configService.getOrThrow<string>("JWT_REFRESH_TOKEN_SECRET"),
-        expiresIn: this.configService.getOrThrow<string>("JWT_REFRESH_TOKEN_EXP") as JwtSignOptions["expiresIn"],
+        expiresIn: this.configService.getOrThrow<number>("JWT_REFRESH_TOKEN_EXP"),
       },
     );
   }
 
-  /**
-   * refresh token을 해시해서 저장한다.
-   *
-   * @param userId 사용자 ID
-   * @param deviceId 기기 ID
-   * @param refreshToken refresh token
-   */
   private async saveRefreshToken(userId: string, deviceId: string, refreshToken: string) {
-    const hashedRefreshToken = await bcrypt.hash(refreshToken, 10);
+    await this.authRepository.saveRefreshToken({ userId, deviceId, ...(await this.prepareRefreshToken(refreshToken)) });
+  }
+
+  private async prepareRefreshToken(refreshToken: string) {
     const decoded = this.jwtService.decode(refreshToken) as { exp?: number } | null;
     if (!decoded?.exp) throw new CustomUnauthorizedException(AuthErrorMessage.RefreshTokenExpUndefined);
 
-    await this.authRepository.saveRefreshToken({
-      userId,
-      deviceId,
-      refreshToken: hashedRefreshToken,
+    return {
+      refreshToken: await bcrypt.hash(refreshToken, 10),
       refreshTokenExp: new Date(decoded.exp * 1000),
-    });
+    };
   }
 }

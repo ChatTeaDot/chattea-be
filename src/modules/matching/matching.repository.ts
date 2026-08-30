@@ -1,12 +1,11 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, avg, count, desc, eq, gt, gte, isNotNull, isNull, lt, ne, notExists, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, ne, notExists, or, sql } from "drizzle-orm";
 import { Database, DRIZZLE } from "src/modules/database/database.module";
 import {
   matchActions,
   matches,
   roomMembers,
   rooms,
-  scores,
   userBlocks,
   userBoosts,
   userConsumableBalances,
@@ -25,6 +24,15 @@ type CandidateBase = {
   region: string | null;
   intro: string;
 };
+
+type MatchingTransaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+const lockMatchingKey = (tx: MatchingTransaction, key: string) =>
+  tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+const orderedMatchingPair = (userId: string, targetUserId: string): [string, string] =>
+  userId < targetUserId ? [userId, targetUserId] : [targetUserId, userId];
+const matchingPairKey = (userId: string, targetUserId: string) =>
+  `matching:pair:${orderedMatchingPair(userId, targetUserId).join(":")}`;
 
 @Injectable()
 export class MatchingRepository {
@@ -99,10 +107,10 @@ export class MatchingRepository {
       .orderBy(desc(users.createdAt))
       .limit(50);
 
-    return Promise.all(rows.map((row) => this.withCandidateDetails(userId, row)));
+    return this.withCandidateDetails(userId, rows);
   }
 
-  async likedMeCandidates(userId: string) {
+  async likedMeCandidates(userId: string, limit: number) {
     const rows = await this.db
       .select({
         id: users.userId,
@@ -121,27 +129,36 @@ export class MatchingRepository {
           isNotNull(users.profileCompletedAt),
           isNull(users.hiddenAt),
           isNull(users.deletedAt),
+          notExists(
+            this.db
+              .select()
+              .from(userBlocks)
+              .where(
+                or(
+                  and(eq(userBlocks.blockerUserId, userId), eq(userBlocks.blockedUserId, users.userId)),
+                  and(eq(userBlocks.blockerUserId, users.userId), eq(userBlocks.blockedUserId, userId)),
+                ),
+              ),
+          ),
         ),
       )
-      .orderBy(desc(userLikes.createdAt));
+      .orderBy(desc(userLikes.createdAt))
+      .limit(limit);
 
-    return Promise.all(rows.map((row) => this.withCandidateDetails(userId, row)));
+    return this.withCandidateDetails(userId, rows);
   }
 
-  async createLikedMeAccess(input: { userId: string; periodStart: Date; viewedCount: number }) {
-    await this.db
+  async consumeLikedMeAccess(input: { userId: string; periodStart: Date; limit: number }) {
+    const access = await this.db
       .insert(userLikedMeAccesses)
-      .values({ ...input, updatedAt: new Date() })
+      .values({ userId: input.userId, periodStart: input.periodStart, viewedCount: 1, updatedAt: new Date() })
       .onConflictDoUpdate({
         target: [userLikedMeAccesses.userId, userLikedMeAccesses.periodStart],
-        set: { viewedCount: input.viewedCount, updatedAt: new Date() },
-      });
-  }
-
-  async findLikedMeAccess(userId: string, periodStart: Date) {
-    return this.db.query.userLikedMeAccesses.findFirst({
-      where: and(eq(userLikedMeAccesses.userId, userId), eq(userLikedMeAccesses.periodStart, periodStart)),
-    });
+        set: { viewedCount: sql`${userLikedMeAccesses.viewedCount} + 1`, updatedAt: new Date() },
+        setWhere: lt(userLikedMeAccesses.viewedCount, input.limit),
+      })
+      .returning({ viewedCount: userLikedMeAccesses.viewedCount });
+    return access.length > 0;
   }
 
   async actOnCandidate(input: {
@@ -149,10 +166,52 @@ export class MatchingRepository {
     targetUserId: string;
     action: "skip" | "like" | "superlike";
     dailyLimit: number | null;
+    now: Date;
     dayStart: Date;
     dayEnd: Date;
   }) {
     return this.db.transaction(async (tx) => {
+      await lockMatchingKey(tx, `matching:user:${input.userId}`);
+      await lockMatchingKey(tx, matchingPairKey(input.userId, input.targetUserId));
+      const existingAction = await tx.query.matchActions.findFirst({
+        columns: { action: true },
+        where: and(
+          eq(matchActions.actorUserId, input.userId),
+          eq(matchActions.targetUserId, input.targetUserId),
+          isNull(matchActions.revertedAt),
+        ),
+        orderBy: desc(matchActions.createdAt),
+      });
+      if (existingAction) {
+        if (existingAction.action !== input.action) throw new Error("MATCH_ACTION_CONFLICT");
+        if (input.action === "skip") {
+          return {
+            matched: false,
+            roomId: undefined,
+            remainingSuperLikeCredits: undefined,
+            created: false,
+          } as const;
+        }
+        const [userLowId, userHighId] = orderedMatchingPair(input.userId, input.targetUserId);
+        const [existingMatch, balance] = await Promise.all([
+          tx.query.matches.findFirst({
+            columns: { roomId: true },
+            where: and(eq(matches.userLowId, userLowId), eq(matches.userHighId, userHighId)),
+          }),
+          input.action === "superlike"
+            ? tx.query.userConsumableBalances.findFirst({
+                columns: { superLikeCredits: true },
+                where: eq(userConsumableBalances.userId, input.userId),
+              })
+            : undefined,
+        ]);
+        return {
+          matched: Boolean(existingMatch),
+          roomId: existingMatch?.roomId,
+          remainingSuperLikeCredits: balance?.superLikeCredits,
+          created: false,
+        } as const;
+      }
       const actor = await tx.query.users.findFirst({
         columns: { gender: true, interestedGender: true, hiddenAt: true, deletedAt: true, profileCompletedAt: true },
         where: eq(users.userId, input.userId),
@@ -212,7 +271,9 @@ export class MatchingRepository {
           if (input.dailyLimit !== null && Number(countRow?.count ?? 0) >= input.dailyLimit) {
             throw new Error("LIKE_LIMIT_REACHED");
           }
-          await tx.insert(userLikes).values({ likerUserId: input.userId, likedUserId: input.targetUserId });
+          await tx
+            .insert(userLikes)
+            .values({ likerUserId: input.userId, likedUserId: input.targetUserId, createdAt: input.now });
         }
       }
 
@@ -220,9 +281,12 @@ export class MatchingRepository {
         actorUserId: input.userId,
         targetUserId: input.targetUserId,
         action: input.action,
+        createdAt: input.now,
       });
 
-      if (input.action === "skip") return { matched: false, roomId: undefined, remainingSuperLikeCredits: undefined };
+      if (input.action === "skip") {
+        return { matched: false, roomId: undefined, remainingSuperLikeCredits: undefined, created: true } as const;
+      }
 
       const matched = await this.matchIfReverseExists(tx, input.userId, input.targetUserId);
       const balance =
@@ -232,25 +296,33 @@ export class MatchingRepository {
               where: eq(userConsumableBalances.userId, input.userId),
             })
           : undefined;
-      return { ...matched, remainingSuperLikeCredits: balance?.superLikeCredits };
+      return { ...matched, remainingSuperLikeCredits: balance?.superLikeCredits, created: true } as const;
     });
   }
 
   async undoLastAction(userId: string) {
     return this.db.transaction(async (tx) => {
+      await lockMatchingKey(tx, `matching:user:${userId}`);
       const action = await tx.query.matchActions.findFirst({
         where: and(eq(matchActions.actorUserId, userId), isNull(matchActions.revertedAt)),
         orderBy: desc(matchActions.createdAt),
       });
       if (!action) return undefined;
 
-      const [userLowId, userHighId] = [action.actorUserId, action.targetUserId].sort();
+      await lockMatchingKey(tx, matchingPairKey(action.actorUserId, action.targetUserId));
+      const [claimedAction] = await tx
+        .update(matchActions)
+        .set({ revertedAt: new Date() })
+        .where(and(eq(matchActions.id, action.id), isNull(matchActions.revertedAt)))
+        .returning();
+      if (!claimedAction) return undefined;
+
+      const [userLowId, userHighId] = orderedMatchingPair(action.actorUserId, action.targetUserId);
       const existingMatch = await tx.query.matches.findFirst({
         where: and(eq(matches.userLowId, userLowId), eq(matches.userHighId, userHighId)),
       });
       if (existingMatch) throw new Error("UNDO_NOT_AVAILABLE_AFTER_MATCH");
 
-      await tx.update(matchActions).set({ revertedAt: new Date() }).where(eq(matchActions.id, action.id));
       if (action.action === "like" || action.action === "superlike") {
         await tx
           .delete(userLikes)
@@ -265,7 +337,7 @@ export class MatchingRepository {
             });
         }
       }
-      return action;
+      return claimedAction;
     });
   }
 
@@ -276,43 +348,28 @@ export class MatchingRepository {
         .set({ boostCredits: sql`${userConsumableBalances.boostCredits} - 1`, updatedAt: now })
         .where(and(eq(userConsumableBalances.userId, userId), gt(userConsumableBalances.boostCredits, 0)))
         .returning({ boostCredits: userConsumableBalances.boostCredits });
-      if (credits.length === 0) throw new Error("BOOST_CREDITS_REQUIRED");
+      const [balance] = credits;
+      if (!balance) throw new Error("BOOST_CREDITS_REQUIRED");
+
+      const activeBoost = await tx.query.userBoosts.findFirst({
+        columns: { id: true },
+        where: and(eq(userBoosts.userId, userId), gt(userBoosts.endsAt, now)),
+      });
+      if (activeBoost) throw new Error("BOOST_ALREADY_ACTIVE");
 
       const endsAt = new Date(now.getTime() + 30 * 60 * 1000);
       await tx.insert(userBoosts).values({ userId, source: "consumable", startsAt: now, endsAt });
-      return { endsAt, remainingBoostCredits: credits[0]!.boostCredits };
+      return { endsAt, remainingBoostCredits: balance.boostCredits };
     });
   }
 
-  async upsertScore(input: { scorerUserId: string; scoredUserId: string; score: number }) {
-    await this.db
-      .insert(scores)
-      .values(input)
-      .onConflictDoUpdate({
-        target: [scores.scorerUserId, scores.scoredUserId],
-        set: { score: input.score, updatedAt: new Date() },
-      });
-  }
-
-  async scoreSummary(userId: string) {
-    const [row] = await this.db
-      .select({ averageScore: avg(scores.score), scoreCount: count() })
-      .from(scores)
-      .where(eq(scores.scoredUserId, userId));
-    return row;
-  }
-
-  private async matchIfReverseExists(
-    tx: Parameters<Parameters<Database["transaction"]>[0]>[0],
-    userId: string,
-    targetUserId: string,
-  ) {
+  private async matchIfReverseExists(tx: MatchingTransaction, userId: string, targetUserId: string) {
     const reverse = await tx.query.userLikes.findFirst({
       where: and(eq(userLikes.likerUserId, targetUserId), eq(userLikes.likedUserId, userId)),
     });
     if (!reverse) return { matched: false, roomId: undefined };
 
-    const [userLowId, userHighId] = [userId, targetUserId].sort();
+    const [userLowId, userHighId] = orderedMatchingPair(userId, targetUserId);
     const existing = await tx.query.matches.findFirst({
       where: and(eq(matches.userLowId, userLowId), eq(matches.userHighId, userHighId)),
     });
@@ -331,38 +388,55 @@ export class MatchingRepository {
     return { matched: true, roomId: room.id };
   }
 
-  private async withCandidateDetails(userId: string, row: CandidateBase) {
+  private async withCandidateDetails(userId: string, rows: CandidateBase[]) {
+    if (rows.length === 0) return [];
     const now = new Date();
-    const [subscription, like, photos, boost] = await Promise.all([
-      this.db.query.userSubscriptions.findFirst({
-        columns: { planId: true },
-        where: and(
-          eq(userSubscriptions.userId, row.id),
-          eq(userSubscriptions.status, "active"),
-          or(isNull(userSubscriptions.currentPeriodEndsAt), gt(userSubscriptions.currentPeriodEndsAt, now)),
-        ),
-        orderBy: desc(userSubscriptions.createdAt),
-      }),
-      this.db.query.userLikes.findFirst({
-        columns: { likerUserId: true },
-        where: and(eq(userLikes.likerUserId, userId), eq(userLikes.likedUserId, row.id)),
-      }),
-      this.db.query.userProfilePhotos.findMany({
-        columns: { url: true, position: true },
-        where: eq(userProfilePhotos.userId, row.id),
-        orderBy: userProfilePhotos.position,
-      }),
-      this.db.query.userBoosts.findFirst({
-        columns: { id: true },
-        where: and(eq(userBoosts.userId, row.id), gt(userBoosts.endsAt, now)),
-      }),
+    const candidateIds = rows.map((row) => row.id);
+    const [subscriptions, likes, photos, boosts] = await Promise.all([
+      this.db
+        .select({ userId: userSubscriptions.userId, planId: userSubscriptions.planId })
+        .from(userSubscriptions)
+        .where(
+          and(
+            inArray(userSubscriptions.userId, candidateIds),
+            eq(userSubscriptions.status, "active"),
+            or(isNull(userSubscriptions.currentPeriodEndsAt), gt(userSubscriptions.currentPeriodEndsAt, now)),
+          ),
+        )
+        .orderBy(desc(userSubscriptions.updatedAt)),
+      this.db
+        .select({ likedUserId: userLikes.likedUserId })
+        .from(userLikes)
+        .where(and(eq(userLikes.likerUserId, userId), inArray(userLikes.likedUserId, candidateIds))),
+      this.db
+        .select({ userId: userProfilePhotos.userId, url: userProfilePhotos.url, position: userProfilePhotos.position })
+        .from(userProfilePhotos)
+        .where(inArray(userProfilePhotos.userId, candidateIds))
+        .orderBy(userProfilePhotos.userId, userProfilePhotos.position),
+      this.db
+        .select({ userId: userBoosts.userId })
+        .from(userBoosts)
+        .where(and(inArray(userBoosts.userId, candidateIds), gt(userBoosts.endsAt, now))),
     ]);
-    return {
+    const plansByUser = new Map<string, string>();
+    for (const subscription of subscriptions) {
+      if (!plansByUser.has(subscription.userId)) plansByUser.set(subscription.userId, subscription.planId);
+    }
+    const likedUserIds = new Set(likes.map((like) => like.likedUserId));
+    const boostedUserIds = new Set(boosts.map((boost) => boost.userId));
+    const photosByUser = new Map<string, { url: string; position: number }[]>();
+    for (const photo of photos) {
+      const userPhotos = photosByUser.get(photo.userId) ?? [];
+      userPhotos.push({ url: photo.url, position: photo.position });
+      photosByUser.set(photo.userId, userPhotos);
+    }
+
+    return rows.map((row) => ({
       ...row,
-      photos,
-      likedByMe: Boolean(like),
-      planId: subscription?.planId ?? "free",
-      boostActive: Boolean(boost),
-    };
+      photos: photosByUser.get(row.id) ?? [],
+      likedByMe: likedUserIds.has(row.id),
+      planId: plansByUser.get(row.id) ?? "free",
+      boostActive: boostedUserIds.has(row.id),
+    }));
   }
 }

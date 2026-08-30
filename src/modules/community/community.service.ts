@@ -1,10 +1,9 @@
-import { Injectable, Optional } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { NotificationService } from "src/modules/notification/notification.service";
 import { CommunityRepository } from "./community.repository";
-import { CommunityCommentPayload, CommunityPostPayload, CommunityProfilePayload } from "./community.types";
+import { CommunityCommentPayload, CommunityPostPayload } from "./community.types";
 
 const DEFAULT_COMMUNITY_NAME = "익명";
-const COMMUNITY_NAME_MAX_LENGTH = 20;
 const TITLE_MAX_LENGTH = 80;
 const BODY_MAX_LENGTH = 1000;
 const COMMENT_MAX_LENGTH = 500;
@@ -12,33 +11,19 @@ const REPORT_REASON_MAX_LENGTH = 120;
 
 @Injectable()
 export class CommunityService {
-  /**
-   * CommunityService에서 사용할 CommunityRepository 의존성을 주입한다.
-   *
-   * @param communityRepository 커뮤니티 저장소
-   */
+  private readonly logger = new Logger(CommunityService.name);
+
   constructor(
     private readonly communityRepository: CommunityRepository,
     @Optional() private readonly notificationService?: NotificationService,
   ) {}
 
-  /**
-   * 커뮤니티 게시글 목록을 조회한다.
-   *
-   * @returns 게시글 목록
-   */
   async posts(): Promise<CommunityPostPayload[]> {
     const result = await this.communityRepository.posts();
 
     return result.map(rowToPost);
   }
 
-  /**
-   * 커뮤니티 댓글 목록을 조회한다.
-   *
-   * @param postId 게시글 ID
-   * @returns 댓글 목록
-   */
   async comments(postId: string): Promise<CommunityCommentPayload[]> {
     validateUuid(postId, "COMMUNITY_POST_ID_INVALID");
     const result = await this.communityRepository.comments(postId);
@@ -46,91 +31,66 @@ export class CommunityService {
     return result.map(rowToComment);
   }
 
-  /**
-   * 사용자의 커뮤니티 프로필을 조회한다.
-   *
-   * @param userId 사용자 ID
-   * @returns 커뮤니티 프로필
-   */
-  async profile(userId: string): Promise<CommunityProfilePayload> {
+  async createPost(
+    userId: string,
+    input: { idempotencyKey: string; title: string; body: string },
+  ): Promise<CommunityPostPayload> {
     validateUuid(userId, "USER_ID_INVALID");
-    return { name: (await this.communityRepository.findProfile(userId))?.name ?? DEFAULT_COMMUNITY_NAME };
-  }
-
-  /**
-   * 사용자의 커뮤니티 프로필 이름을 변경한다.
-   *
-   * @param userId 사용자 ID
-   * @param name 커뮤니티 이름
-   * @returns 변경된 커뮤니티 프로필
-   */
-  async updateProfile(userId: string, name: string): Promise<CommunityProfilePayload> {
-    validateUuid(userId, "USER_ID_INVALID");
-    return this.communityRepository.upsertProfile({
-      userId,
-      name: validateText(name, COMMUNITY_NAME_MAX_LENGTH, "COMMUNITY_PROFILE_NAME"),
-    });
-  }
-
-  /**
-   * 커뮤니티 게시글을 생성한다.
-   *
-   * @param userId 작성자 ID
-   * @param input 게시글 작성 입력값
-   * @returns 생성된 게시글
-   */
-  async createPost(userId: string, input: { title: string; body: string }): Promise<CommunityPostPayload> {
-    validateUuid(userId, "USER_ID_INVALID");
+    validateUuid(input.idempotencyKey, "COMMUNITY_POST_IDEMPOTENCY_KEY_INVALID");
+    const title = validateText(input.title, TITLE_MAX_LENGTH, "COMMUNITY_TITLE");
+    const body = validateText(input.body, BODY_MAX_LENGTH, "COMMUNITY_BODY");
     const authorName = await this.authorName(userId);
-    const post = await this.communityRepository.createPost({
+    const { post } = await this.communityRepository.createPost({
+      id: input.idempotencyKey,
       userId,
-      title: validateText(input.title, TITLE_MAX_LENGTH, "COMMUNITY_TITLE"),
-      body: validateText(input.body, BODY_MAX_LENGTH, "COMMUNITY_BODY"),
+      title,
+      body,
     });
 
     return rowToPost({ ...post, authorName, id: post.id, commentCount: "0" });
   }
 
-  /**
-   * 커뮤니티 댓글을 생성한다.
-   *
-   * @param userId 작성자 ID
-   * @param postId 게시글 ID
-   * @param body 댓글 본문
-   * @returns 생성된 댓글
-   */
-  async createComment(userId: string, postId: string, body: string): Promise<CommunityCommentPayload> {
+  async createComment(
+    userId: string,
+    postId: string,
+    body: string,
+    idempotencyKey: string,
+  ): Promise<CommunityCommentPayload> {
     validateUuid(userId, "USER_ID_INVALID");
     validateUuid(postId, "COMMUNITY_POST_ID_INVALID");
+    validateUuid(idempotencyKey, "COMMUNITY_COMMENT_IDEMPOTENCY_KEY_INVALID");
     const post = await this.communityRepository.findPost(postId);
     if (!post) throw new Error("COMMUNITY_POST_NOT_FOUND");
     const authorName = await this.authorName(userId);
-    const comment = await this.communityRepository.createComment({
+    const result = await this.communityRepository.createComment({
+      id: idempotencyKey,
       userId,
       postId,
       body: validateText(body, COMMENT_MAX_LENGTH, "COMMUNITY_COMMENT"),
     });
-    if (this.notificationService && post.authorUserId !== userId) {
-      await this.notificationService.notify({
-        userId: post.authorUserId,
-        type: "comment",
-        title: "새 댓글이 달렸어요",
-        body: "내 글에 남긴 댓글을 확인해 보세요.",
-        route: `/community/${postId}`,
-        sourceId: comment.id,
-      });
+    const { comment } = result;
+    if (result.created && this.notificationService && post.authorUserId !== userId) {
+      try {
+        await this.notificationService.notify({
+          userId: post.authorUserId,
+          type: "comment",
+          title: "새 댓글이 달렸어요",
+          body: "내 글에 남긴 댓글을 확인해 보세요.",
+          route: `/community/${postId}`,
+          sourceId: comment.id,
+        });
+      } catch (error) {
+        this.logger.warn(
+          JSON.stringify({
+            event: "community_notification_failed",
+            error: error instanceof Error ? error.message : "unknown",
+          }),
+        );
+      }
     }
     return rowToComment({ ...comment, authorName });
   }
 
-  /**
-   * 커뮤니티 게시글을 신고한다.
-   *
-   * @param userId 신고자 ID
-   * @param postId 신고 대상 게시글 ID
-   * @param reason 신고 사유
-   * @returns 처리 성공 여부
-   */
   async reportPost(userId: string, postId: string, reason: string): Promise<boolean> {
     validateUuid(userId, "USER_ID_INVALID");
     validateUuid(postId, "COMMUNITY_POST_ID_INVALID");
@@ -154,12 +114,6 @@ export class CommunityService {
     return true;
   }
 
-  /**
-   * 사용자 커뮤니티 이름을 조회한다.
-   *
-   * @param userId 사용자 ID
-   * @returns 커뮤니티 이름
-   */
   private async authorName(userId: string): Promise<string> {
     return (await this.communityRepository.findProfile(userId))?.name ?? DEFAULT_COMMUNITY_NAME;
   }

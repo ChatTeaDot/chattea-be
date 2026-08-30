@@ -1,11 +1,9 @@
-import { Field, InputType, ObjectType } from "@nestjs/graphql";
+import { createUnionType, Field, ObjectType } from "@nestjs/graphql";
 import { Request } from "express";
-import { Gender } from "src/modules/database/schema";
+import { Gender, RefreshToken } from "src/modules/database/schema";
+import { AccessTokenClaims, RefreshTokenClaims } from "./token-claims";
 
-export type JwtPayload = {
-  userId: string;
-  deviceId?: string;
-};
+export type JwtPayload = AccessTokenClaims;
 
 export type AuthRequest = Request & {
   user: JwtPayload;
@@ -16,9 +14,10 @@ export type AuthRequest = Request & {
 };
 
 export type RefreshAuthRequest = Request & {
-  user: JwtPayload & { deviceId: string };
+  user: RefreshTokenClaims;
+  validatedRefreshToken: RefreshToken;
   cookies: {
-    refresh_token: string;
+    refresh_token?: string;
   };
 };
 
@@ -35,23 +34,14 @@ export type KakaoRawProfile = {
   };
 };
 
-@InputType()
-export class SignupAuthInput {
-  @Field()
-  email!: string;
-
-  @Field()
-  password!: string;
-
-  @Field()
-  userName!: string;
-
-  @Field()
-  gender!: Gender;
-
-  @Field()
-  phoneVerificationToken!: string;
-}
+export type SignupAuthInput = {
+  email: string;
+  password: string;
+  userName: string;
+  gender: Gender;
+  phoneVerificationToken: string;
+  termsAccepted: boolean;
+};
 
 export type SignupAuthRepositoryInput = SignupAuthInput & {
   userId: string;
@@ -61,23 +51,18 @@ export type SignupAuthRepositoryInput = SignupAuthInput & {
 export type KakaoProfile = {
   providerUserId: string;
   email?: string;
+  userName?: string;
 };
 
 export type KakaoLoginResult = {
   kakaoPhoneVerificationToken: string;
 };
 
-@InputType()
-export class SigninAuthInput {
-  @Field()
-  email!: string;
-
-  @Field()
-  password!: string;
-
-  @Field()
-  phoneVerificationToken!: string;
-}
+export type SigninAuthInput = {
+  email: string;
+  password: string;
+  phoneVerificationToken: string;
+};
 
 @ObjectType()
 export class TokenPayload {
@@ -89,7 +74,28 @@ export class TokenPayload {
 }
 
 @ObjectType()
-export class SignedPayload {
-  @Field()
-  isSigned!: boolean;
+export class KakaoLoginSuccessPayload {
+  @Field(() => Boolean)
+  requiresPhone!: boolean;
+
+  @Field(() => TokenPayload)
+  session!: TokenPayload;
 }
+
+@ObjectType()
+export class KakaoRequiresPhonePayload {
+  @Field(() => Boolean)
+  requiresPhone!: boolean;
+
+  @Field()
+  kakaoPhoneVerificationToken!: string;
+
+  @Field(() => String, { nullable: true })
+  userName!: string | null;
+}
+
+export const KakaoLoginPayload = createUnionType({
+  name: "KakaoLoginPayload",
+  types: () => [KakaoLoginSuccessPayload, KakaoRequiresPhonePayload] as const,
+  resolveType: (value) => (value.requiresPhone ? KakaoRequiresPhonePayload : KakaoLoginSuccessPayload),
+});
