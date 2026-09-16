@@ -253,6 +253,75 @@ export class AuthRepository {
     });
   }
 
+  async consumeKakaoPhoneVerificationTokenForUser(
+    userId: string,
+    token: string,
+  ): Promise<User | undefined> {
+    return this.db.transaction(async (tx) => {
+      const [kakaoToken] = await tx
+        .update(kakaoPhoneVerificationTokens)
+        .set({ usedAt: new Date() })
+        .where(
+          and(
+            eq(kakaoPhoneVerificationTokens.tokenHash, hashToken(token)),
+            isNull(kakaoPhoneVerificationTokens.usedAt),
+            gt(kakaoPhoneVerificationTokens.expiresAt, new Date()),
+          ),
+        )
+        .returning();
+      if (!kakaoToken) throw new KakaoPhoneVerificationTokenConsumeFailedError();
+
+      return tx.query.users.findFirst({ where: eq(users.userId, userId) });
+    });
+  }
+
+  async createKakaoUserWithToken(
+    input: {
+      userId: string;
+      providerUserId: string;
+      email: string;
+      userName: string;
+      password: string;
+      gender: Gender;
+    },
+    token: string,
+  ): Promise<User> {
+    return this.db.transaction(async (tx) => {
+      const [kakaoToken] = await tx
+        .update(kakaoPhoneVerificationTokens)
+        .set({ usedAt: new Date() })
+        .where(
+          and(
+            eq(kakaoPhoneVerificationTokens.tokenHash, hashToken(token)),
+            isNull(kakaoPhoneVerificationTokens.usedAt),
+            gt(kakaoPhoneVerificationTokens.expiresAt, new Date()),
+          ),
+        )
+        .returning();
+      if (!kakaoToken) throw new KakaoPhoneVerificationTokenConsumeFailedError();
+
+      const [user] = await tx
+        .insert(users)
+        .values({
+          userId: input.userId,
+          email: input.email,
+          password: input.password,
+          userName: input.userName,
+          gender: input.gender,
+        })
+        .returning();
+      if (!user) throw new Error("USER_CREATE_FAILED");
+
+      await tx.insert(authIdentities).values({
+        userId: input.userId,
+        provider: "kakao",
+        providerUserId: input.providerUserId,
+      });
+
+      return user;
+    });
+  }
+
   async createKakaoPhoneUser(input: {
     userId: string;
     providerUserId: string;

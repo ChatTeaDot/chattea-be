@@ -68,8 +68,8 @@ export class CompletePhoneSignupInput {
 
 @InputType()
 export class CompleteKakaoPhoneSignupInput {
-  @Field()
-  phoneVerificationToken!: string;
+  @Field({ nullable: true })
+  phoneVerificationToken?: string;
 
   @Field()
   kakaoPhoneVerificationToken!: string;
@@ -79,6 +79,16 @@ export class CompleteKakaoPhoneSignupInput {
 
   @Field()
   gender!: string;
+
+  // ponytail: accepted but not persisted — users table has no height/job/mbti columns yet
+  @Field({ nullable: true })
+  heightCm?: number;
+
+  @Field({ nullable: true })
+  job?: string;
+
+  @Field({ nullable: true })
+  mbti?: string;
 
   @Field(() => Boolean)
   termsAccepted!: boolean;

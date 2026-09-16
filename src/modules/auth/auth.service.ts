@@ -104,7 +104,7 @@ export class AuthService {
 
   async completeKakaoPhoneSignup(
     input: {
-      phoneVerificationToken: string;
+      phoneVerificationToken?: string;
       kakaoPhoneVerificationToken: string;
       userName: string;
       gender: Gender;
@@ -113,6 +113,49 @@ export class AuthService {
     deviceId: string,
   ) {
     if (!input.termsAccepted) throw new CustomBadRequestException(AuthErrorMessage.TermsNotAccepted);
+
+    if (!input.phoneVerificationToken) {
+      const kakaoToken = await this.authRepository.findKakaoPhoneVerificationToken(
+        input.kakaoPhoneVerificationToken,
+      );
+      if (!kakaoToken) throw new CustomUnauthorizedException(AuthErrorMessage.InvalidKakaoPhoneVerificationToken);
+
+      if (kakaoToken.userId) {
+        const user = await this.mapTokenConsumeError(
+          this.authRepository.consumeKakaoPhoneVerificationTokenForUser(
+            kakaoToken.userId,
+            input.kakaoPhoneVerificationToken,
+          ),
+        );
+        if (!user) throw new CustomUnauthorizedException(AuthErrorMessage.InvalidKakaoPhoneVerificationToken);
+        await this.userService.restoreIfWithinGrace(user.userId);
+        return this.issueTokens(user, deviceId);
+      }
+
+      if (!input.gender) throw new CustomBadRequestException(AuthErrorMessage.InvalidGender);
+      const email = normalizeEmail(
+        kakaoToken.email ?? `kakao_${hashToken(kakaoToken.providerUserId).slice(0, 32)}@kakao.local`,
+      );
+      const userName = normalizeUserName(input.userName);
+
+      const createdUser = await this.mapDuplicateUserError(
+        this.mapTokenConsumeError(
+          this.authRepository.createKakaoUserWithToken(
+            {
+              userId: uuidv4(),
+              providerUserId: kakaoToken.providerUserId,
+              email,
+              userName,
+              password: await bcrypt.hash(uuidv4(), 10),
+              gender: input.gender,
+            },
+            input.kakaoPhoneVerificationToken,
+          ),
+        ),
+      );
+
+      return this.issueTokens(createdUser, deviceId);
+    }
 
     const [phoneVerificationToken, kakaoToken] = await Promise.all([
       this.findPhoneVerificationToken(input.phoneVerificationToken),
@@ -159,7 +202,10 @@ export class AuthService {
             phone: phoneVerificationToken.phoneE164,
             gender: input.gender,
           },
-          input,
+          {
+            phoneVerificationToken: input.phoneVerificationToken,
+            kakaoPhoneVerificationToken: input.kakaoPhoneVerificationToken,
+          },
         ),
       ),
     );
