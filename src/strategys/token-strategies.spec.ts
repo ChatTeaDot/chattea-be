@@ -5,8 +5,8 @@ import { AuthService } from "src/modules/auth/auth.service";
 import { AuthRequest, RefreshAuthRequest } from "src/modules/auth/auth.types";
 import { RefreshToken } from "src/modules/database/schema";
 import { UserRepository } from "src/modules/user/user.repository";
-import { JwtAccessTokenStrategy } from "./accessToken.strategy";
-import { JwtRefreshTokenStrategy } from "./refreshToken.strategy";
+import { JwtAccessTokenStrategy } from "./access-token.strategy";
+import { JwtRefreshTokenStrategy } from "./refresh-token.strategy";
 
 describe("JWT token strategies", () => {
   const config = { getOrThrow: () => "separate-secret" } as unknown as ConfigService;

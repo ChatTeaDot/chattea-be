@@ -1,6 +1,6 @@
 import { UseGuards } from "@nestjs/common";
 import { Context, Query, Resolver } from "@nestjs/graphql";
-import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
+import { JwtAccessTokenGuard } from "src/guards/access-token.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
 import { BillingService } from "./billing.service";
 import { BillingProductPayload, ConsumableBalancePayload } from "./billing.types";

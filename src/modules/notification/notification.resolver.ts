@@ -1,6 +1,6 @@
 import { UseGuards } from "@nestjs/common";
 import { Args, Context, Mutation, Query, Resolver } from "@nestjs/graphql";
-import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
+import { JwtAccessTokenGuard } from "src/guards/access-token.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
 import { deviceIdFromRequest } from "src/modules/auth/device-id";
 import { NotificationService } from "./notification.service";

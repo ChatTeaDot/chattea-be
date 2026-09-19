@@ -253,10 +253,7 @@ export class AuthRepository {
     });
   }
 
-  async consumeKakaoPhoneVerificationTokenForUser(
-    userId: string,
-    token: string,
-  ): Promise<User | undefined> {
+  async consumeKakaoPhoneVerificationTokenForUser(userId: string, token: string): Promise<User | undefined> {
     return this.db.transaction(async (tx) => {
       const [kakaoToken] = await tx
         .update(kakaoPhoneVerificationTokens)

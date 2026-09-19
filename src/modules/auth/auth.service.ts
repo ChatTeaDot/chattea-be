@@ -115,9 +115,7 @@ export class AuthService {
     if (!input.termsAccepted) throw new CustomBadRequestException(AuthErrorMessage.TermsNotAccepted);
 
     if (!input.phoneVerificationToken) {
-      const kakaoToken = await this.authRepository.findKakaoPhoneVerificationToken(
-        input.kakaoPhoneVerificationToken,
-      );
+      const kakaoToken = await this.authRepository.findKakaoPhoneVerificationToken(input.kakaoPhoneVerificationToken);
       if (!kakaoToken) throw new CustomUnauthorizedException(AuthErrorMessage.InvalidKakaoPhoneVerificationToken);
 
       if (kakaoToken.userId) {
