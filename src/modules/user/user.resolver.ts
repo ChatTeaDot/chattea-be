@@ -1,6 +1,6 @@
 import { UseGuards } from "@nestjs/common";
 import { Args, Context, Mutation, Query, Resolver } from "@nestjs/graphql";
-import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
+import { JwtAccessTokenGuard } from "src/guards/access-token.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
 import { UserService } from "./user.service";
 import { AccountDeletionPayload, CurrentSubscriptionPayload, UpdateUserProfileInput, UserPayload } from "./user.types";

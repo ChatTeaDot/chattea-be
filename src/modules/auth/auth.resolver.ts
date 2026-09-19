@@ -1,7 +1,7 @@
 import { Args, Context, Mutation, Resolver } from "@nestjs/graphql";
 import { UseGuards } from "@nestjs/common";
 import { Request, Response } from "express";
-import { JwtRefreshTokenGuard } from "src/guards/refreshToken.guard";
+import { JwtRefreshTokenGuard } from "src/guards/refresh-token.guard";
 import { authCookieOptions } from "./cookie-options";
 import { AuthService } from "./auth.service";
 import { deviceIdFromRequest } from "./device-id";

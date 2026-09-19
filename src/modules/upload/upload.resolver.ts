@@ -1,6 +1,6 @@
 import { UseGuards } from "@nestjs/common";
 import { Args, Context, ID, Mutation, Resolver } from "@nestjs/graphql";
-import { JwtAccessTokenGuard } from "src/guards/accessToken.guard";
+import { JwtAccessTokenGuard } from "src/guards/access-token.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
 import { UploadService } from "./upload.service";
 import { CreateUploadInput, CreateUploadPayload, VerifiedUploadPayload } from "./upload.types";

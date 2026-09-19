@@ -1,7 +1,7 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import * as bcrypt from "bcrypt";
 import { Response } from "express";
-import { JwtRefreshTokenStrategy } from "src/strategys/refreshToken.strategy";
+import { JwtRefreshTokenStrategy } from "src/strategys/refresh-token.strategy";
 import { AuthResolver } from "src/modules/auth/auth.resolver";
 import { AuthService } from "src/modules/auth/auth.service";
 import { AuthRepository } from "src/modules/auth/auth.repository";
