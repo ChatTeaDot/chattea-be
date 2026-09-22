@@ -86,15 +86,16 @@ export class ChatRepository {
     return members.map((member) => member.userId);
   }
 
-  async messages(input: { roomId: string; limit: number; after?: string | null }) {
-    const where = input.after
+  async messages(input: { roomId: string; limit: number; after?: string | null; before?: string | null }) {
+    const cursorId = input.after ?? input.before;
+    const where = cursorId
       ? and(
           eq(messages.roomId, input.roomId),
           isNull(messages.deletedAt),
-          sql<boolean>`(${messages.createdAt}, ${messages.id}) > (
+          sql<boolean>`(${messages.createdAt}, ${messages.id}) ${sql.raw(input.after ? ">" : "<")} (
             SELECT cursor."createdAt", cursor.id
             FROM ${messages} AS cursor
-            WHERE cursor.id = ${input.after}
+            WHERE cursor.id = ${cursorId}
               AND cursor."roomId" = ${input.roomId}
               AND cursor."deletedAt" IS NULL
           )`,
