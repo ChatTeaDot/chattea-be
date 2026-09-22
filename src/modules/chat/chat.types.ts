@@ -46,6 +46,9 @@ export class ChatMessagesInput {
 
   @Field({ nullable: true })
   after?: string;
+
+  @Field({ nullable: true })
+  before?: string;
 }
 
 @InputType()

@@ -97,6 +97,50 @@ describe("ChatService", () => {
     expect(repository.messages).toHaveBeenCalledWith({ roomId, limit: 50, after: id });
   });
 
+  it("rejects a malformed before cursor", async () => {
+    const repository = {
+      isRoomMember: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      messages: jest.fn(),
+    } as unknown as ChatRepository;
+    const service = new ChatService(repository);
+
+    await expect(service.messages(userId, { roomId, before: "not-a-cursor" })).rejects.toThrow(
+      "MESSAGE_CURSOR_INVALID",
+    );
+    expect(repository.messages).not.toHaveBeenCalled();
+  });
+
+  it("rejects a request mixing after and before cursors", async () => {
+    const repository = {
+      isRoomMember: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      messages: jest.fn(),
+    } as unknown as ChatRepository;
+    const service = new ChatService(repository);
+
+    await expect(
+      service.messages(userId, {
+        roomId,
+        after: "f234994b-67ab-4387-9ac6-38f1b85c7027",
+        before: "5f29b801-2c88-4b0a-97db-f68bbfa03270",
+      }),
+    ).rejects.toThrow("MESSAGE_CURSOR_INVALID");
+    expect(repository.messages).not.toHaveBeenCalled();
+  });
+
+  it("passes a before cursor to the repository after validation", async () => {
+    const id = "f234994b-67ab-4387-9ac6-38f1b85c7027";
+    const repository = {
+      isRoomMember: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      findMessageCursor: jest.fn<() => Promise<{ id: string }>>().mockResolvedValue({ id }),
+      messages: jest.fn<() => Promise<never[]>>().mockResolvedValue([]),
+    } as unknown as ChatRepository;
+    const service = new ChatService(repository);
+
+    await service.messages(userId, { roomId, before: id });
+    expect(repository.findMessageCursor).toHaveBeenCalledWith(id, roomId);
+    expect(repository.messages).toHaveBeenCalledWith({ roomId, limit: 50, before: id });
+  });
+
   it("rejects a malformed message id before editing", async () => {
     const repository = { editMessage: jest.fn() } as unknown as ChatRepository;
     const service = new ChatService(repository);

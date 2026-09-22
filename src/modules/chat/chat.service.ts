@@ -30,16 +30,23 @@ export class ChatService {
 
   async messages(
     userId: string,
-    input: { roomId: string; first?: number | null; after?: string | null },
+    input: { roomId: string; first?: number | null; after?: string | null; before?: string | null },
   ): Promise<ChatMessagePayload[]> {
     this.validateUuid(input.roomId, "ROOM_ID_INVALID");
     await this.requireRoomMember(input.roomId, userId);
     const limit = Math.min(input.first ?? 50, 100);
     if (limit < 1) throw new Error("MESSAGE_PAGE_SIZE_INVALID");
-    if (input.after) this.validateUuid(input.after, "MESSAGE_CURSOR_INVALID");
-    const cursor = input.after ? await this.chatRepository.findMessageCursor(input.after, input.roomId) : null;
-    if (input.after && !cursor) throw new Error("MESSAGE_CURSOR_INVALID");
-    const result = await this.chatRepository.messages({ roomId: input.roomId, limit, after: cursor?.id });
+    if (input.after && input.before) throw new Error("MESSAGE_CURSOR_INVALID");
+    const cursorId = input.after ?? input.before;
+    if (cursorId) this.validateUuid(cursorId, "MESSAGE_CURSOR_INVALID");
+    const cursor = cursorId ? await this.chatRepository.findMessageCursor(cursorId, input.roomId) : null;
+    if (cursorId && !cursor) throw new Error("MESSAGE_CURSOR_INVALID");
+    const result = await this.chatRepository.messages({
+      roomId: input.roomId,
+      limit,
+      after: input.after ? cursor?.id : undefined,
+      before: input.before ? cursor?.id : undefined,
+    });
 
     return result.map(rowToMessage);
   }
