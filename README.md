@@ -7,7 +7,7 @@ ChatTea의 API 서버. NestJS 11 + GraphQL + Drizzle ORM + PostgreSQL 17.
 - NestJS 11, GraphQL(Code First), Passport + JWT(액세스/리프레시)
 - Drizzle ORM, PostgreSQL 17, 커스텀 마이그레이션 러너
 - Kakao OAuth, SMS 본인인증, RevenueCat 웹훅, Expo Push, Cloudflare R2
-- Docker Compose 로컬/프로덕션 스택, Vitest 단위 + e2e
+- Docker Compose 로컬/프로덕션 스택, Jest 단위 + e2e
 
 ## 도메인
 
@@ -27,3 +27,4 @@ ChatTea의 API 서버. NestJS 11 + GraphQL + Drizzle ORM + PostgreSQL 17.
 - **웹훅 무결성**: RevenueCat 서명을 상수시간 HMAC-SHA256 비교 + 5분 타임스탬프 윈도우 + 이벤트 ID 멱등성 + 트랜잭션 커밋. 미구현 entitlement 이벤트는 거짓 확인 대신 501
 - **커스텀 마이그레이션 러너**: `_migrations`에 파일명·체크섬 기록(이력 변조 시 배포 실패), advisory lock, `CREATE INDEX CONCURRENTLY` 같은 non-transactional 구문을 위한 strict 단일 구문 모드
 - **Maintenance 워커**: 계정 삭제, 푸시 발송/영수증, 스테이징 정리를 advisory lock 아래 배치로 실행 — API 프로세스와 분리
+- **요청 상관키**: 모든 요청에 `x-request-id`를 발급·에코하고 `http_request` JSON 로그에 `requestId`·`deviceId`·`statusCode`·`durationMs`를 남겨 프론트 트레이스와 대조 가능
