@@ -44,6 +44,7 @@ const bootstrap = async () => {
         JSON.stringify({
           event: "http_request",
           requestId,
+          deviceId: req.headers["x-device-id"] ?? null,
           method: req.method,
           path: req.path,
           statusCode: res.statusCode,
