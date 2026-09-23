@@ -1,0 +1,129 @@
+name: chattea
+
+x-backend-environment: &backend-environment
+  NODE_ENV: production
+  PORT: 4000
+  DD_ENV: ${SERVICE_ENV:-production}
+  DD_VERSION: ${SERVICE_VERSION:-unversioned}
+  TRUST_PROXY: ${TRUST_PROXY:?TRUST_PROXY is required}
+  POSTGRES_HOST: ${POSTGRES_HOST:?POSTGRES_HOST is required}
+  POSTGRES_PORT: ${POSTGRES_PORT:?POSTGRES_PORT is required}
+  POSTGRES_USERNAME: ${POSTGRES_USERNAME:?POSTGRES_USERNAME is required}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+  POSTGRES_DATABASE: ${POSTGRES_DATABASE:?POSTGRES_DATABASE is required}
+  POSTGRES_SSL: ${POSTGRES_SSL:?POSTGRES_SSL is required}
+  POSTGRES_SSL_CA: ${POSTGRES_SSL_CA:-}
+  JWT_ACCESS_TOKEN_SECRET: ${JWT_ACCESS_TOKEN_SECRET:?JWT_ACCESS_TOKEN_SECRET is required}
+  JWT_REFRESH_TOKEN_SECRET: ${JWT_REFRESH_TOKEN_SECRET:?JWT_REFRESH_TOKEN_SECRET is required}
+  JWT_ACCESS_TOKEN_EXP: ${JWT_ACCESS_TOKEN_EXP:?JWT_ACCESS_TOKEN_EXP is required}
+  JWT_REFRESH_TOKEN_EXP: ${JWT_REFRESH_TOKEN_EXP:?JWT_REFRESH_TOKEN_EXP is required}
+  SIGNUP_TOKEN_SECRET: ${SIGNUP_TOKEN_SECRET:?SIGNUP_TOKEN_SECRET is required}
+  KAKAO_SIGNUP_TOKEN_SECRET: ${KAKAO_SIGNUP_TOKEN_SECRET:?KAKAO_SIGNUP_TOKEN_SECRET is required}
+  KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:?KAKAO_CLIENT_ID is required}
+  KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
+  KAKAO_CALLBACK_URL: ${KAKAO_CALLBACK_URL:?KAKAO_CALLBACK_URL is required}
+  PHONE_CODE_PEPPER: ${PHONE_CODE_PEPPER:?PHONE_CODE_PEPPER is required}
+  SMS_PROVIDER_URL: ${SMS_PROVIDER_URL:?SMS_PROVIDER_URL is required}
+  SMS_PROVIDER_AUTHORIZATION: ${SMS_PROVIDER_AUTHORIZATION:?SMS_PROVIDER_AUTHORIZATION is required}
+  SMS_SENDER_ID: ${SMS_SENDER_ID:?SMS_SENDER_ID is required}
+  R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:?R2_ACCOUNT_ID is required}
+  R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID is required}
+  R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:?R2_SECRET_ACCESS_KEY is required}
+  R2_BUCKET: ${R2_BUCKET:?R2_BUCKET is required}
+  R2_PUBLIC_BASE_URL: ${R2_PUBLIC_BASE_URL:?R2_PUBLIC_BASE_URL is required}
+  EXPO_PUSH_ENABLED: ${EXPO_PUSH_ENABLED:-false}
+  EXPO_PUSH_ACCESS_TOKEN: ${EXPO_PUSH_ACCESS_TOKEN:-}
+  REVENUECAT_WEBHOOK_SECRET: ${REVENUECAT_WEBHOOK_SECRET:?REVENUECAT_WEBHOOK_SECRET is required}
+  REVENUECAT_IOS_APP_ID: ${REVENUECAT_IOS_APP_ID:?REVENUECAT_IOS_APP_ID is required}
+  REVENUECAT_ANDROID_APP_ID: ${REVENUECAT_ANDROID_APP_ID:?REVENUECAT_ANDROID_APP_ID is required}
+  CLIENT_URL: ${CLIENT_URL:?CLIENT_URL is required}
+
+services:
+  chattea-migrate:
+    image: ghcr.io/chatteadot/chattea-be@sha256:${CHATTEA_BACKEND_DIGEST:?CHATTEA_BACKEND_DIGEST is required}
+    command:
+      [
+        "sh",
+        "-c",
+        "node --env-file-if-exists=.env dist/scripts/preflight.js && exec node --env-file-if-exists=.env dist/scripts/migrate.js",
+      ]
+    environment:
+      <<: *backend-environment
+      DD_SERVICE: chattea-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  chattea-be:
+    container_name: chattea-be
+    image: ghcr.io/chatteadot/chattea-be@sha256:${CHATTEA_BACKEND_DIGEST:?CHATTEA_BACKEND_DIGEST is required}
+    environment:
+      <<: *backend-environment
+      DD_SERVICE: chattea-be
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4000:4000"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  chattea-maintenance:
+    container_name: chattea-maintenance
+    image: ghcr.io/chatteadot/chattea-be@sha256:${CHATTEA_BACKEND_DIGEST:?CHATTEA_BACKEND_DIGEST is required}
+    command:
+      [
+        "sh",
+        "-c",
+        "node --env-file-if-exists=.env dist/scripts/preflight.js && exec node --env-file-if-exists=.env dist/src/maintenance.js",
+      ]
+    environment:
+      <<: *backend-environment
+      DD_SERVICE: chattea-maintenance
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('fs').stat('/tmp/chattea-maintenance-heartbeat',(e,s)=>process.exit(!e&&Date.now()-s.mtimeMs<150000?0:1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  postgres:
+    container_name: chattea-postgres
+    image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+    environment:
+      POSTGRES_DB: ${POSTGRES_DATABASE:?POSTGRES_DATABASE is required}
+      POSTGRES_USER: ${POSTGRES_USERNAME:?POSTGRES_USERNAME is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:

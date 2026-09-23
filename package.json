@@ -1,0 +1,139 @@
+{
+  "name": "chattea-be",
+  "version": "0.1.0",
+  "description": "",
+  "author": "",
+  "private": true,
+  "packageManager": "pnpm@10.13.1",
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "nest build && tsc -p tsconfig.build.json",
+    "config:check": "node --env-file-if-exists=.env -r ts-node/register -r tsconfig-paths/register scripts/preflight.ts",
+    "docker:up": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build",
+    "docker:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",
+    "docker:kill": "docker compose down || true; osascript -e 'quit app \"Docker\"' || true; sleep 5; pkill -f '/Applications/Docker.app' || true; pkill -f 'docker-agent' || true",
+    "docker:logs": "docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f chattea-be",
+    "db:up": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres",
+    "db:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",
+    "db:logs": "docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f postgres",
+    "audit:all": "pnpm audit --audit-level high",
+    "audit:prod": "pnpm audit --prod --audit-level high",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"package.json\" \"tsconfig*.json\" \"docker-compose*.yml\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"package.json\" \"tsconfig*.json\" \"docker-compose*.yml\"",
+    "migrate": "node --env-file-if-exists=.env -r ts-node/register -r tsconfig-paths/register scripts/migrate.ts",
+    "start": "nest start",
+    "start:dev": "nest start --watch",
+    "start:debug": "nest start --debug --watch",
+    "start:prod": "node dist/src/main",
+    "lint": "NODE_OPTIONS='--experimental-strip-types --disable-warning=ExperimentalWarning' eslint \"{src,apps,libs,test,scripts}/**/*.ts\" --fix",
+    "lint:check": "NODE_OPTIONS='--experimental-strip-types --disable-warning=ExperimentalWarning' eslint \"{src,apps,libs,test,scripts}/**/*.ts\"",
+    "test": "jest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage",
+    "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
+    "test:e2e": "node --env-file-if-exists=.env -e \"if (!process.env.POSTGRES_DATABASE || !process.env.POSTGRES_USERNAME) throw new Error('PostgreSQL test configuration is required; copy .env.example to .env')\" && node --env-file-if-exists=.env ./node_modules/jest/bin/jest.js --config ./test/jest-e2e.json"
+  },
+  "dependencies": {
+    "@apollo/server": "^5.5.1",
+    "@as-integrations/express5": "^1.1.2",
+    "@aws-sdk/client-s3": "^3.1120.0",
+    "@aws-sdk/s3-request-presigner": "^3.1120.0",
+    "@nestjs/apollo": "^13.4.2",
+    "@nestjs/common": "^11.1.7",
+    "@nestjs/config": "^4.0.2",
+    "@nestjs/core": "^11.1.7",
+    "@nestjs/graphql": "^13.4.2",
+    "@nestjs/jwt": "^11.0.1",
+    "@nestjs/passport": "^11.0.5",
+    "@nestjs/platform-express": "^11.1.7",
+    "bcrypt": "^6.0.0",
+    "cookie-parser": "^1.4.6",
+    "drizzle-orm": "^0.45.2",
+    "expo-server-sdk": "^5.0.0",
+    "express": "^5.2.1",
+    "graphql": "^16.14.2",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "passport-kakao": "^1.0.1",
+    "pg": "^8.11.5",
+    "reflect-metadata": "^0.2.0",
+    "rxjs": "^7.8.1",
+    "sharp": "^0.35.4",
+    "uuid": "^11.1.1"
+  },
+  "devDependencies": {
+    "@jest/globals": "^30.5.0",
+    "@nestjs/cli": "^11.0.10",
+    "@nestjs/schematics": "^11.0.9",
+    "@nestjs/testing": "^11.1.7",
+    "@types/bcrypt": "^6.0.0",
+    "@types/cookie-parser": "^1.4.7",
+    "@types/express": "^5.0.6",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.13.3",
+    "@types/passport": "^1.0.17",
+    "@types/passport-jwt": "^4.0.1",
+    "@types/passport-kakao": "^1.0.3",
+    "@types/pg": "^8.15.4",
+    "@types/supertest": "^7.2.1",
+    "@typescript-eslint/eslint-plugin": "^8.62.1",
+    "@typescript-eslint/parser": "^8.62.1",
+    "eslint": "^10.9.1",
+    "eslint-config-prettier": "^9.0.0",
+    "jest": "^30.5.0",
+    "jiti": "^2.7.0",
+    "prettier": "^3.0.0",
+    "supertest": "^7.2.2",
+    "ts-jest": "^29.1.0",
+    "ts-node": "^10.9.1",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.8.3"
+  },
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "setupFilesAfterEnv": [
+      "<rootDir>/jest-setup.ts"
+    ],
+    "transform": {
+      "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "moduleNameMapper": {
+      "^src/(.*)$": "<rootDir>/$1"
+    },
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
+    "coverageDirectory": "../coverage",
+    "testEnvironment": "node"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "bcrypt",
+      "sharp"
+    ],
+    "overrides": {
+      "brace-expansion@<1.1.18": "1.1.18",
+      "brace-expansion@>=5.0.0 <5.0.9": "5.0.9",
+      "browserslist@<4.28.7": "4.28.7",
+      "fast-uri@<3.1.6": "3.1.6",
+      "js-yaml@>=3.0.0 <3.15.2": "3.15.2",
+      "js-yaml@>=4.0.0 <4.3.2": "4.3.2",
+      "multer": "2.3.0",
+      "passport-oauth2": "1.8.0",
+      "@nestjs/graphql>ws": "8.21.0",
+      "subscriptions-transport-ws>ws": "7.5.13"
+    },
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "@apollo/server": "5"
+      }
+    }
+  }
+}
