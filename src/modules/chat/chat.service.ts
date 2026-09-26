@@ -1,4 +1,5 @@
 import { Injectable, Optional } from "@nestjs/common";
+import { Subject } from "rxjs";
 import { CustomUnauthorizedException } from "src/common/errors/custom-exceptions";
 import { NotificationService } from "src/modules/notification/notification.service";
 import { ChatRepository } from "./chat.repository";
@@ -11,6 +12,9 @@ const IDEMPOTENCY_KEY_MAX_LENGTH = 128;
 
 @Injectable()
 export class ChatService {
+  private readonly messageEvents = new Subject<{ roomId: string; message: ChatMessagePayload }>();
+  readonly messageEvents$ = this.messageEvents.asObservable();
+
   constructor(
     private readonly chatRepository: ChatRepository,
     @Optional() private readonly notificationService?: NotificationService,
@@ -96,6 +100,9 @@ export class ChatService {
           }),
         ),
       );
+    }
+    if (result.created) {
+      this.messageEvents.next({ roomId: input.roomId, message: rowToMessage(message) });
     }
     return rowToMessage(message);
   }
