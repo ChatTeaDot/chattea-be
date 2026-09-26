@@ -158,4 +158,32 @@ describe("ChatService", () => {
     await expect(service.deleteMessage(userId, "invalid")).rejects.toThrow("MESSAGE_ID_INVALID");
     expect(repository.deleteMessage).not.toHaveBeenCalled();
   });
+
+  it("emits a message event after a new message is created", async () => {
+    const message = {
+      id: "821cc06e-7275-49cf-9d8b-a70e65f78240",
+      roomId,
+      senderUserId: userId,
+      text: "hello",
+      idempotencyKey: null,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    };
+    const repository = {
+      isRoomMember: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      activeMessageCount: jest.fn<() => Promise<number>>().mockResolvedValue(1),
+      createMessage: jest.fn<() => Promise<{ message: typeof message; created: boolean }>>().mockResolvedValue({
+        message,
+        created: true,
+      }),
+    } as unknown as ChatRepository;
+    const service = new ChatService(repository);
+    const events: { roomId: string; message: { id: string } }[] = [];
+    service.messageEvents$.subscribe((event) => events.push(event));
+
+    await service.sendMessage(userId, { roomId, text: "hello" });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.roomId).toBe(roomId);
+    expect(events[0]?.message.id).toBe(message.id);
+  });
 });
