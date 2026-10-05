@@ -158,4 +158,118 @@ describe("ChatService", () => {
     await expect(service.deleteMessage(userId, "invalid")).rejects.toThrow("MESSAGE_ID_INVALID");
     expect(repository.deleteMessage).not.toHaveBeenCalled();
   });
+
+  it("publishes an added event when a message is created", async () => {
+    const message = {
+      id: "f234994b-67ab-4387-9ac6-38f1b85c7027",
+      roomId,
+      senderUserId: userId,
+      text: "hello",
+      idempotencyKey: null,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    };
+    const repository = {
+      isRoomMember: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      findMessageByIdempotencyKey: jest.fn(),
+      activeMessageCount: jest.fn<() => Promise<number>>().mockResolvedValue(1),
+      createMessage: jest
+        .fn<() => Promise<{ message: typeof message; created: boolean }>>()
+        .mockResolvedValue({ message, created: true }),
+      otherRoomMemberIds: jest.fn<() => Promise<string[]>>().mockResolvedValue([]),
+    } as unknown as ChatRepository;
+    const pubSub = {
+      publish: jest.fn<(trigger: string, payload: unknown) => Promise<void>>().mockResolvedValue(undefined),
+    };
+    const service = new ChatService(repository, undefined, pubSub as never);
+
+    await service.sendMessage(userId, { roomId, text: "hello" });
+    expect(pubSub.publish).toHaveBeenCalledWith("chatEvent", {
+      chatEvent: {
+        type: "added",
+        message: {
+          id: message.id,
+          roomId,
+          senderUserId: userId,
+          text: "hello",
+          idempotencyKey: undefined,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    });
+  });
+
+  it("does not publish when the idempotency replay returns an existing message", async () => {
+    const message = {
+      id: "f234994b-67ab-4387-9ac6-38f1b85c7027",
+      roomId,
+      senderUserId: userId,
+      text: "hello",
+      idempotencyKey: "same-key",
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    };
+    const repository = {
+      isRoomMember: jest.fn<() => Promise<boolean>>().mockResolvedValue(true),
+      findMessageByIdempotencyKey: jest.fn<() => Promise<typeof message>>().mockResolvedValue(message),
+    } as unknown as ChatRepository;
+    const pubSub = { publish: jest.fn() };
+    const service = new ChatService(repository, undefined, pubSub as never);
+
+    await service.sendMessage(userId, { roomId, text: "hello", idempotencyKey: "same-key" });
+    expect(pubSub.publish).not.toHaveBeenCalled();
+  });
+
+  it("publishes an edited event when a message is edited", async () => {
+    const message = {
+      id: "f234994b-67ab-4387-9ac6-38f1b85c7027",
+      roomId,
+      senderUserId: userId,
+      text: "edited",
+      idempotencyKey: null,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    };
+    const repository = {
+      editMessage: jest.fn<() => Promise<typeof message>>().mockResolvedValue(message),
+    } as unknown as ChatRepository;
+    const pubSub = {
+      publish: jest.fn<(trigger: string, payload: unknown) => Promise<void>>().mockResolvedValue(undefined),
+    };
+    const service = new ChatService(repository, undefined, pubSub as never);
+
+    await service.editMessage(userId, { messageId: message.id, text: "edited" });
+    expect(pubSub.publish).toHaveBeenCalledWith("chatEvent", {
+      chatEvent: { type: "edited", message: expect.objectContaining({ id: message.id, text: "edited" }) },
+    });
+  });
+
+  it("publishes a deleted event when a message is deleted", async () => {
+    const message = {
+      id: "f234994b-67ab-4387-9ac6-38f1b85c7027",
+      roomId,
+      senderUserId: userId,
+      text: "gone",
+      idempotencyKey: null,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+      deletedAt: new Date("2026-01-01T00:01:00.000Z"),
+    };
+    const repository = {
+      deleteMessage: jest.fn<() => Promise<typeof message>>().mockResolvedValue(message),
+    } as unknown as ChatRepository;
+    const pubSub = {
+      publish: jest.fn<(trigger: string, payload: unknown) => Promise<void>>().mockResolvedValue(undefined),
+    };
+    const service = new ChatService(repository, undefined, pubSub as never);
+
+    await service.deleteMessage(userId, message.id);
+    expect(pubSub.publish).toHaveBeenCalledWith("chatEvent", {
+      chatEvent: { type: "deleted", message: expect.objectContaining({ id: message.id }) },
+    });
+  });
+
+  it("assertRoomMember rejects a malformed room id", async () => {
+    const repository = { isRoomMember: jest.fn() } as unknown as ChatRepository;
+    const service = new ChatService(repository);
+
+    await expect(service.assertRoomMember("not-a-room", userId)).rejects.toThrow("ROOM_ID_INVALID");
+    expect(repository.isRoomMember).not.toHaveBeenCalled();
+  });
 });

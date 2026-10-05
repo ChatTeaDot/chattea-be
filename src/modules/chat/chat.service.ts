@@ -1,8 +1,15 @@
-import { Injectable, Optional } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
+import { PubSub } from "graphql-subscriptions";
 import { CustomUnauthorizedException } from "src/common/errors/custom-exceptions";
 import { NotificationService } from "src/modules/notification/notification.service";
 import { ChatRepository } from "./chat.repository";
-import { ChatMessagePayload, ChatRoomPayload } from "./chat.types";
+import {
+  CHAT_EVENT_TRIGGER,
+  CHAT_PUB_SUB,
+  ChatMessageEventType,
+  ChatMessagePayload,
+  ChatRoomPayload,
+} from "./chat.types";
 
 const FIRST_MESSAGE_MAX_LENGTH = 30;
 const MESSAGE_MAX_LENGTH = 90;
@@ -14,6 +21,7 @@ export class ChatService {
   constructor(
     private readonly chatRepository: ChatRepository,
     @Optional() private readonly notificationService?: NotificationService,
+    @Optional() @Inject(CHAT_PUB_SUB) private readonly pubSub?: PubSub,
   ) {}
 
   async rooms(userId: string): Promise<ChatRoomPayload[]> {
@@ -28,12 +36,16 @@ export class ChatService {
     }));
   }
 
+  async assertRoomMember(roomId: string, userId: string): Promise<void> {
+    this.validateUuid(roomId, "ROOM_ID_INVALID");
+    await this.requireRoomMember(roomId, userId);
+  }
+
   async messages(
     userId: string,
     input: { roomId: string; first?: number | null; after?: string | null; before?: string | null },
   ): Promise<ChatMessagePayload[]> {
-    this.validateUuid(input.roomId, "ROOM_ID_INVALID");
-    await this.requireRoomMember(input.roomId, userId);
+    await this.assertRoomMember(input.roomId, userId);
     const limit = Math.min(input.first ?? 50, 100);
     if (limit < 1) throw new Error("MESSAGE_PAGE_SIZE_INVALID");
     if (input.after && input.before) throw new Error("MESSAGE_CURSOR_INVALID");
@@ -82,6 +94,7 @@ export class ChatService {
     const message = result.message;
     if (!message) throw new Error("MESSAGE_CREATE_FAILED");
     if (message.deletedAt) throw new Error("IDEMPOTENCY_KEY_ALREADY_USED");
+    if (result.created) await this.publishMessageEvent("added", message);
     if (result.created && this.notificationService) {
       const recipientIds = await this.chatRepository.otherRoomMemberIds(input.roomId, userId);
       await Promise.allSettled(
@@ -105,12 +118,15 @@ export class ChatService {
     const text = this.validateText(input.text);
     const message = await this.chatRepository.editMessage({ messageId: input.messageId, senderUserId: userId, text });
     if (!message) throw new Error("MESSAGE_NOT_FOUND");
+    await this.publishMessageEvent("edited", message);
     return rowToMessage(message);
   }
 
   async deleteMessage(userId: string, messageId: string): Promise<boolean> {
     this.validateUuid(messageId, "MESSAGE_ID_INVALID");
-    return Boolean(await this.chatRepository.deleteMessage(messageId, userId));
+    const message = await this.chatRepository.deleteMessage(messageId, userId);
+    if (message) await this.publishMessageEvent("deleted", message);
+    return Boolean(message);
   }
 
   async markRoomRead(userId: string, roomId: string): Promise<boolean> {
@@ -141,6 +157,12 @@ export class ChatService {
     if (!text) throw new Error("MESSAGE_TEXT_REQUIRED");
     if (text.length > MESSAGE_MAX_LENGTH) throw new Error("MESSAGE_TEXT_TOO_LONG");
     return text;
+  }
+
+  private async publishMessageEvent(type: ChatMessageEventType, message: MessageRow): Promise<void> {
+    await this.pubSub?.publish(CHAT_EVENT_TRIGGER, {
+      [CHAT_EVENT_TRIGGER]: { type, message: rowToMessage(message) },
+    });
   }
 
   private async requireRoomMember(roomId: string, userId: string): Promise<void> {
