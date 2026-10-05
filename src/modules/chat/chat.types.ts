@@ -36,6 +36,20 @@ export class ChatMessagePayload {
   createdAt!: string;
 }
 
+export type ChatMessageEventType = "added" | "edited" | "deleted";
+
+@ObjectType()
+export class ChatMessageEventPayload {
+  @Field()
+  type!: string;
+
+  @Field(() => ChatMessagePayload)
+  message!: ChatMessagePayload;
+}
+
+export const CHAT_EVENT_TRIGGER = "chatEvent";
+export const CHAT_PUB_SUB = "CHAT_PUB_SUB";
+
 @InputType()
 export class ChatMessagesInput {
   @Field()

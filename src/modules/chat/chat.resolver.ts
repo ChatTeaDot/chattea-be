@@ -1,10 +1,14 @@
-import { Args, Context, Mutation, Query, Resolver } from "@nestjs/graphql";
-import { UseGuards } from "@nestjs/common";
+import { Args, Context, Mutation, Query, Resolver, Subscription } from "@nestjs/graphql";
+import { Inject, UseGuards } from "@nestjs/common";
+import { PubSub, withFilter } from "graphql-subscriptions";
 import { JwtAccessTokenGuard } from "src/guards/access-token.guard";
 import { AuthRequest } from "src/modules/auth/auth.types";
 import { ChatService } from "./chat.service";
 import {
   BlockUserInput,
+  CHAT_EVENT_TRIGGER,
+  CHAT_PUB_SUB,
+  ChatMessageEventPayload,
   ChatMessagePayload,
   ChatMessagesInput,
   ChatRoomPayload,
@@ -16,7 +20,10 @@ import {
 
 @Resolver()
 export class ChatResolver {
-  constructor(private readonly chatService: ChatService) {}
+  constructor(
+    private readonly chatService: ChatService,
+    @Inject(CHAT_PUB_SUB) private readonly pubSub: PubSub,
+  ) {}
 
   @UseGuards(JwtAccessTokenGuard)
   @Query(() => [ChatRoomPayload])
@@ -28,6 +35,16 @@ export class ChatResolver {
   @Query(() => [ChatMessagePayload])
   chatMessages(@Context("req") req: AuthRequest, @Args("input") input: ChatMessagesInput) {
     return this.chatService.messages(req.user.userId, input);
+  }
+
+  @UseGuards(JwtAccessTokenGuard)
+  @Subscription(() => ChatMessageEventPayload)
+  async chatEvent(@Args("roomId") roomId: string, @Context("req") req: AuthRequest) {
+    await this.chatService.assertRoomMember(roomId, req.user.userId);
+    return withFilter(
+      () => this.pubSub.asyncIterableIterator(CHAT_EVENT_TRIGGER),
+      (payload?: { chatEvent: ChatMessageEventPayload }) => payload?.chatEvent.message.roomId === roomId,
+    )();
   }
 
   @UseGuards(JwtAccessTokenGuard)

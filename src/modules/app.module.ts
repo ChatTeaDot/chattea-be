@@ -16,6 +16,14 @@ import { UploadModule } from "./upload/upload.module";
 import { NotificationModule } from "./notification/notification.module";
 import { BillingModule } from "./billing/billing.module";
 
+const wsConnectionRequest = (connectionParams?: Record<string, unknown>): Request => {
+  const authorization = connectionParams?.["authorization"];
+  return {
+    headers: { authorization: typeof authorization === "string" ? authorization : "" },
+    cookies: {},
+  } as unknown as Request;
+};
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -26,8 +34,17 @@ import { BillingModule } from "./billing/billing.module";
     GraphQLModule.forRoot<ApolloDriverConfig>({
       driver: ApolloDriver,
       autoSchemaFile: true,
-      context: ({ req, res }: { req: Request; res: Response }) => ({ req, res }),
+      context: (ctx: {
+        req?: Request;
+        res?: Response;
+        connectionParams?: Record<string, unknown>;
+        extra?: unknown;
+      }) => ({
+        req: ctx.extra !== undefined ? wsConnectionRequest(ctx.connectionParams) : ctx.req,
+        res: ctx.res,
+      }),
       introspection: process.env.NODE_ENV !== "production",
+      subscriptions: { "graphql-ws": true },
       validationRules: [graphqlDocumentFieldLimitRule],
     }),
     DatabaseModule,
